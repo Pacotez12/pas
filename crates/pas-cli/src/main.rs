@@ -1,11 +1,10 @@
-mod autostart;
-
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use pas_core::CoreError;
+use pas_core::autostart;
 use pas_core::protocol::{
     CreateParams, CreateResult, ERR_WAIT_TIMEOUT, IdParams, METHOD_SESSION_CREATE,
     METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_SEND,
@@ -117,6 +116,7 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
                         env: BTreeMap::new(),
                         cols: 120,
                         rows: 40,
+                        project_id: None,
                     },
                 )
                 .await?;

@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use pas_core::CoreError;
-use pas_core::client::Client;
+use crate::CoreError;
+use crate::client::Client;
 
 pub async fn connect_or_spawn(path: &Path) -> Result<Client, CoreError> {
     match Client::connect(path).await {

@@ -11,6 +11,20 @@ pub const METHOD_SESSION_SEND: &str = "session.send";
 pub const METHOD_SESSION_READ: &str = "session.read";
 pub const METHOD_SESSION_WAIT: &str = "session.wait";
 pub const METHOD_SESSION_KILL: &str = "session.kill";
+pub const METHOD_SESSION_INPUT: &str = "session.input";
+pub const METHOD_SESSION_RESIZE: &str = "session.resize";
+pub const METHOD_SESSION_SNAPSHOT: &str = "session.snapshot";
+pub const METHOD_SESSION_SUBSCRIBE: &str = "session.subscribe";
+pub const METHOD_SESSION_UNSUBSCRIBE: &str = "session.unsubscribe";
+pub const METHOD_SESSION_SUBSCRIBE_ALL: &str = "session.subscribe_all";
+pub const METHOD_PROJECT_ADD: &str = "project.add";
+pub const METHOD_PROJECT_LIST: &str = "project.list";
+pub const METHOD_PROJECT_REMOVE: &str = "project.remove";
+
+pub const EVENT_SESSION_OUTPUT: &str = "session.output";
+pub const EVENT_SESSION_STATE: &str = "session.state";
+pub const EVENT_SESSION_CREATED: &str = "session.created";
+pub const EVENT_SESSION_REMOVED: &str = "session.removed";
 
 pub const ERR_METHOD_NOT_FOUND: i32 = -32601;
 pub const ERR_INVALID_PARAMS: i32 = -32602;
@@ -26,6 +40,24 @@ pub struct Request {
     pub method: String,
     #[serde(default)]
     pub params: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Notification {
+    pub jsonrpc: String,
+    pub method: String,
+    #[serde(default)]
+    pub params: Value,
+}
+
+impl Notification {
+    pub fn new(method: impl Into<String>, params: Value) -> Self {
+        Self {
+            jsonrpc: "2.0".into(),
+            method: method.into(),
+            params,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +112,8 @@ pub struct SessionInfo {
     pub command: Vec<String>,
     pub state: SessionState,
     pub created_at: u64,
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 fn default_cols() -> u16 {
@@ -106,6 +140,8 @@ pub struct CreateParams {
     pub cols: u16,
     #[serde(default = "default_rows")]
     pub rows: u16,
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,5 +190,59 @@ pub struct PingResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateResult {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputParams {
+    pub id: String,
+    pub data_b64: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResizeParams {
+    pub id: String,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotResult {
+    pub data_b64: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectAddParams {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectInfo {
+    pub id: String,
+    pub name: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOutputEvent {
+    pub id: String,
+    pub data_b64: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionStateEvent {
+    pub id: String,
+    pub state: SessionState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCreatedEvent {
+    pub info: SessionInfo,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionRemovedEvent {
     pub id: String,
 }
