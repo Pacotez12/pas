@@ -533,3 +533,322 @@ async fn agy_post_invocation_and_silence_do_not_set_idle_until_stop() {
     dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;
     server_task.abort();
 }
+
+async fn wait_for_screen_contains(
+    session: &pasd::session::Session,
+    needle: &str,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if session.read(None).contains(needle) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timeout esperando {needle:?} en pantalla; contenido actual: {:?}",
+            session.read(None)
+        );
+        tokio::time::sleep(Duration::from_millis(15)).await;
+    }
+}
+
+#[cfg(unix)]
+fn agy_fake_symlink(dir: &std::path::Path) -> String {
+    let link = dir.join("agy");
+    std::os::unix::fs::symlink(fake_agent_bin(), &link)
+        .expect("no se pudo crear symlink agy -> fake-agent");
+    link.to_string_lossy().into_owned()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn agy_stop_deferred_while_busy_bar_visible_then_idle_on_clear() {
+    let dir = tempdir().unwrap();
+    let sock = dir.path().join("pasd.sock");
+    let listener = bind(&sock).unwrap();
+    let mgr = Manager::new(100);
+    let server_task = tokio::spawn(serve(listener, mgr.clone()));
+
+    let agy_cmd = agy_fake_symlink(dir.path());
+    let created: CreateResult = serde_json::from_value(
+        dispatch(
+            &mgr,
+            req(
+                METHOD_SESSION_CREATE,
+                json!({
+                    "command": [agy_cmd],
+                    "cwd": dir.path(),
+                    "title": "s-agy-busy",
+                }),
+            ),
+        )
+        .await
+        .result
+        .unwrap(),
+    )
+    .unwrap();
+
+    dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 5000 }),
+        ),
+    )
+    .await;
+
+    let session = mgr.get(&created.id).unwrap();
+    assert_eq!(session.state(), SessionState::Idle);
+
+    session.send("busy 3000", true).await.unwrap();
+    wait_for_screen_contains(&session, "esc to cancel", Duration::from_secs(2)).await;
+
+    let sock_c = sock.clone();
+    let id_c = created.id.clone();
+    let stop_res = tokio::task::spawn_blocking(move || {
+        run_pas_hook("agy", "Stop", Some(&id_c), &sock_c, b"{}")
+    })
+    .await
+    .unwrap();
+    assert_eq!(stop_res.code, Some(0));
+    assert_eq!(
+        session.state(),
+        SessionState::Running,
+        "Stop mientras está 'esc to cancel' en pantalla debe mantenerse Running"
+    );
+
+    let wait_early = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 200 }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        wait_early.error.as_ref().map(|e| e.code),
+        Some(ERR_WAIT_TIMEOUT),
+        "wait --until idle no debe volver mientras la barra busy siga visible: {wait_early:?}"
+    );
+    assert_eq!(session.state(), SessionState::Running);
+
+    let wait_done = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 8000 }),
+        ),
+    )
+    .await;
+    assert!(
+        wait_done.error.is_none(),
+        "al desaparecer la barra busy debe pasar a Idle: {wait_done:?}"
+    );
+    let state: SessionState = serde_json::from_value(wait_done.result.unwrap()).unwrap();
+    assert_eq!(state, SessionState::Idle);
+    assert!(
+        session.read(None).contains("? for shortcuts"),
+        "esperaba '? for shortcuts' en pantalla"
+    );
+
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn stop_without_busy_patterns_transitions_to_idle_immediately() {
+    let dir = tempdir().unwrap();
+    let sock = dir.path().join("pasd.sock");
+    let listener = bind(&sock).unwrap();
+    let mgr = Manager::new(100);
+    let server_task = tokio::spawn(serve(listener, mgr.clone()));
+
+    let created: CreateResult = serde_json::from_value(
+        dispatch(
+            &mgr,
+            req(
+                METHOD_SESSION_CREATE,
+                json!({
+                    "command": [fake_agent_bin()],
+                    "cwd": dir.path(),
+                    "title": "s-no-busy-patterns",
+                }),
+            ),
+        )
+        .await
+        .result
+        .unwrap(),
+    )
+    .unwrap();
+
+    dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 5000 }),
+        ),
+    )
+    .await;
+
+    let session = mgr.get(&created.id).unwrap();
+    session.send("busy 3000", true).await.unwrap();
+    wait_for_screen_contains(&session, "esc to cancel", Duration::from_secs(2)).await;
+
+    let sock_c = sock.clone();
+    let id_c = created.id.clone();
+    let stop_res = tokio::task::spawn_blocking(move || {
+        run_pas_hook("agy", "Stop", Some(&id_c), &sock_c, b"{}")
+    })
+    .await
+    .unwrap();
+    assert_eq!(stop_res.code, Some(0));
+    assert_eq!(
+        session.state(),
+        SessionState::Idle,
+        "sin busy_patterns el Stop debe pasar a Idle de inmediato"
+    );
+
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;
+    server_task.abort();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn heuristic_idle_deferred_while_busy_bar_visible() {
+    let dir = tempdir().unwrap();
+    let mgr = Manager::new(100);
+
+    let agy_cmd = agy_fake_symlink(dir.path());
+    let created: CreateResult = serde_json::from_value(
+        dispatch(
+            &mgr,
+            req(
+                METHOD_SESSION_CREATE,
+                json!({
+                    "command": [agy_cmd],
+                    "cwd": dir.path(),
+                    "title": "s-agy-heuristic-busy",
+                }),
+            ),
+        )
+        .await
+        .result
+        .unwrap(),
+    )
+    .unwrap();
+
+    dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 5000 }),
+        ),
+    )
+    .await;
+
+    let session = mgr.get(&created.id).unwrap();
+    session.send("busy 3000", true).await.unwrap();
+    wait_for_screen_contains(&session, "esc to cancel", Duration::from_secs(2)).await;
+
+    let wait_early = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 250 }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        wait_early.error.as_ref().map(|e| e.code),
+        Some(ERR_WAIT_TIMEOUT),
+        "heurística de silencio debe diferir Idle mientras la barra busy siga visible"
+    );
+    assert_eq!(session.state(), SessionState::Running);
+
+    let wait_done = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 8000 }),
+        ),
+    )
+    .await;
+    assert!(wait_done.error.is_none());
+    let state: SessionState = serde_json::from_value(wait_done.result.unwrap()).unwrap();
+    assert_eq!(state, SessionState::Idle);
+
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn hook_waiting_is_immediate_and_clears_pending_idle() {
+    let dir = tempdir().unwrap();
+    let sock = dir.path().join("pasd.sock");
+    let listener = bind(&sock).unwrap();
+    let mgr = Manager::new(100);
+    let server_task = tokio::spawn(serve(listener, mgr.clone()));
+
+    let agy_cmd = agy_fake_symlink(dir.path());
+    let created: CreateResult = serde_json::from_value(
+        dispatch(
+            &mgr,
+            req(
+                METHOD_SESSION_CREATE,
+                json!({
+                    "command": [agy_cmd],
+                    "cwd": dir.path(),
+                    "title": "s-agy-waiting-clears-pending",
+                }),
+            ),
+        )
+        .await
+        .result
+        .unwrap(),
+    )
+    .unwrap();
+
+    dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 5000 }),
+        ),
+    )
+    .await;
+
+    let session = mgr.get(&created.id).unwrap();
+    session.send("busy 3000", true).await.unwrap();
+    wait_for_screen_contains(&session, "esc to cancel", Duration::from_secs(2)).await;
+
+    let sock_c = sock.clone();
+    let id_c = created.id.clone();
+    tokio::task::spawn_blocking(move || run_pas_hook("agy", "Stop", Some(&id_c), &sock_c, b"{}"))
+        .await
+        .unwrap();
+    assert_eq!(session.state(), SessionState::Running);
+
+    let sock_c = sock.clone();
+    let id_c = created.id.clone();
+    tokio::task::spawn_blocking(move || {
+        run_pas_hook("claude", "PermissionRequest", Some(&id_c), &sock_c, b"{}")
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        session.state(),
+        SessionState::Waiting,
+        "Waiting por hook debe ser inmediato"
+    );
+
+    wait_for_screen_contains(&session, "? for shortcuts", Duration::from_secs(8)).await;
+    assert_eq!(
+        session.state(),
+        SessionState::Waiting,
+        "el idle pendiente debió limpiarse al recibir Waiting"
+    );
+
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;
+    server_task.abort();
+}

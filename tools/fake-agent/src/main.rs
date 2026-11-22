@@ -22,6 +22,13 @@ fn handle_line(line: &str, out: &mut BufWriter<io::StdoutLock<'_>>) {
             thread::sleep(Duration::from_millis(ms));
         }
         writeln!(out, "listo").ok();
+    } else if let Some(ms) = line.strip_prefix("busy ") {
+        if let Ok(ms) = ms.trim().parse::<u64>() {
+            write!(out, "esc to cancel · 1 task(s) · /tasks").ok();
+            out.flush().ok();
+            thread::sleep(Duration::from_millis(ms));
+            writeln!(out, "\r\x1b[2K? for shortcuts").ok();
+        }
     } else if let Some(n) = line.strip_prefix("flood ") {
         if let Ok(n) = n.trim().parse::<usize>() {
             for i in 1..=n {

@@ -314,6 +314,9 @@ impl Manager {
         let waiting_patterns = agent_kind
             .and_then(|kind| self.config.compiled_waiting_patterns(kind).ok())
             .unwrap_or_default();
+        let busy_patterns = agent_kind
+            .and_then(|kind| self.config.compiled_busy_patterns(kind).ok())
+            .unwrap_or_default();
 
         if let Some(sock) = self
             .socket_path
@@ -423,6 +426,7 @@ impl Manager {
                 params,
                 self.idle_ms,
                 waiting_patterns,
+                busy_patterns,
                 created_worktree.clone(),
             ),
             Mode::Chat => {

@@ -70,6 +70,8 @@ struct TerminalSession {
     started_at: Instant,
     last_activity_ms: Arc<AtomicU64>,
     hooks_active: Arc<AtomicBool>,
+    busy_patterns: Arc<Vec<Regex>>,
+    idle_pending: Arc<AtomicBool>,
 }
 
 enum SessionKind {
@@ -153,7 +155,7 @@ impl Session {
         idle_ms: u64,
         waiting_patterns: Vec<Regex>,
     ) -> Result<Arc<Self>, SessionError> {
-        Self::spawn_terminal(id, p, idle_ms, waiting_patterns, None)
+        Self::spawn_terminal(id, p, idle_ms, waiting_patterns, Vec::new(), None)
     }
 
     pub fn spawn_terminal(
@@ -161,6 +163,7 @@ impl Session {
         p: CreateParams,
         idle_ms: u64,
         waiting_patterns: Vec<Regex>,
+        busy_patterns: Vec<Regex>,
         worktree: Option<WorktreeInfo>,
     ) -> Result<Arc<Self>, SessionError> {
         let Some(program) = p.command.first().cloned() else {
@@ -236,30 +239,48 @@ impl Session {
         )));
         let (state_tx, mut state_rx) = watch::channel(SessionState::Running);
         let (output_tx, _) = broadcast::channel(OUTPUT_BROADCAST_CAPACITY);
+        let busy_patterns = Arc::new(busy_patterns);
+        let idle_pending = Arc::new(AtomicBool::new(false));
 
         let r_parser = Arc::clone(&parser);
         let r_activity = Arc::clone(&last_activity_ms);
         let r_state = state_tx.clone();
         let r_output = output_tx.clone();
+        let r_busy_patterns = Arc::clone(&busy_patterns);
+        let r_idle_pending = Arc::clone(&idle_pending);
         thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        if let Ok(mut guard) = r_parser.lock() {
-                            guard.process(&buf[..n]);
-                        }
                         let now = started_at.elapsed().as_millis() as u64;
                         r_activity.store(now, Ordering::Release);
-                        r_state.send_if_modified(|s| {
-                            if matches!(s, SessionState::Idle) {
-                                *s = SessionState::Running;
-                                true
+                        if let Ok(mut guard) = r_parser.lock() {
+                            guard.process(&buf[..n]);
+                            if r_idle_pending.load(Ordering::Acquire) {
+                                if !screen_matches_any_locked(&guard, &r_busy_patterns) {
+                                    r_idle_pending.store(false, Ordering::Release);
+                                    r_state.send_if_modified(|s| {
+                                        if matches!(s, SessionState::Running) {
+                                            *s = SessionState::Idle;
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    });
+                                }
                             } else {
-                                false
+                                r_state.send_if_modified(|s| {
+                                    if matches!(s, SessionState::Idle) {
+                                        *s = SessionState::Running;
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                });
                             }
-                        });
+                        }
                         let _ = r_output.send(Bytes::copy_from_slice(&buf[..n]));
                     }
                 }
@@ -280,6 +301,8 @@ impl Session {
         let w_state = state_tx.clone();
         let w_parser = Arc::clone(&parser);
         let w_hooks_active = Arc::clone(&hooks_active);
+        let w_busy_patterns = Arc::clone(&busy_patterns);
+        let w_idle_pending = Arc::clone(&idle_pending);
         tokio::spawn(async move {
             loop {
                 if w_hooks_active.load(Ordering::Acquire) {
@@ -304,22 +327,52 @@ impl Session {
                     if w_hooks_active.load(Ordering::Acquire) {
                         break;
                     }
-                    let next_state = if !waiting_patterns.is_empty()
+                    let is_waiting = !waiting_patterns.is_empty()
                         && last_visible_line_from_parser(&w_parser).is_some_and(|line| {
                             waiting_patterns.iter().any(|re| re.is_match(&line))
-                        }) {
-                        SessionState::Waiting
-                    } else {
-                        SessionState::Idle
-                    };
-                    w_state.send_if_modified(|s| {
-                        if matches!(s, SessionState::Running) {
-                            *s = next_state.clone();
+                        });
+                    if is_waiting {
+                        w_idle_pending.store(false, Ordering::Release);
+                        w_state.send_if_modified(|s| {
+                            if matches!(s, SessionState::Running) {
+                                *s = SessionState::Waiting;
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                        continue;
+                    }
+
+                    let deferred = if let Ok(guard) = w_parser.lock() {
+                        if screen_matches_any_locked(&guard, &w_busy_patterns) {
+                            w_idle_pending.store(true, Ordering::Release);
                             true
                         } else {
+                            w_idle_pending.store(false, Ordering::Release);
+                            w_state.send_if_modified(|s| {
+                                if matches!(s, SessionState::Running) {
+                                    *s = SessionState::Idle;
+                                    true
+                                } else {
+                                    false
+                                }
+                            });
                             false
                         }
-                    });
+                    } else {
+                        false
+                    };
+                    if deferred {
+                        tokio::select! {
+                            _ = tokio::time::sleep(Duration::from_millis(idle_ms)) => {}
+                            res = state_rx.changed() => {
+                                if res.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 } else {
                     let remaining = Duration::from_millis(idle_ms - elapsed);
                     tokio::select! {
@@ -354,6 +407,8 @@ impl Session {
                 started_at,
                 last_activity_ms,
                 hooks_active,
+                busy_patterns,
+                idle_pending,
             }),
         }))
     }
@@ -465,14 +520,17 @@ impl Session {
 
         let now = term.started_at.elapsed().as_millis() as u64;
         term.last_activity_ms.store(now, Ordering::Release);
-        self.state_tx.send_if_modified(|s| {
-            if matches!(s, SessionState::Idle | SessionState::Waiting) {
-                *s = SessionState::Running;
-                true
-            } else {
-                false
-            }
-        });
+        if let Ok(_guard) = term.parser.lock() {
+            term.idle_pending.store(false, Ordering::Release);
+            self.state_tx.send_if_modified(|s| {
+                if matches!(s, SessionState::Idle | SessionState::Waiting) {
+                    *s = SessionState::Running;
+                    true
+                } else {
+                    false
+                }
+            });
+        }
 
         let mut writer = term.writer.lock().expect("writer lock poisoned");
         let write_res = (|| -> std::io::Result<()> {
@@ -661,14 +719,30 @@ impl Session {
         };
         let now = term.started_at.elapsed().as_millis() as u64;
         term.last_activity_ms.store(now, Ordering::Release);
-        self.state_tx.send_if_modified(|s| {
-            if matches!(s, SessionState::Exited { .. }) || *s == next {
-                false
-            } else {
-                *s = next.clone();
-                true
-            }
-        });
+        let Ok(guard) = term.parser.lock() else {
+            return;
+        };
+        if next == SessionState::Idle && screen_matches_any_locked(&guard, &term.busy_patterns) {
+            term.idle_pending.store(true, Ordering::Release);
+            self.state_tx.send_if_modified(|s| {
+                if matches!(s, SessionState::Exited { .. } | SessionState::Running) {
+                    false
+                } else {
+                    *s = SessionState::Running;
+                    true
+                }
+            });
+        } else {
+            term.idle_pending.store(false, Ordering::Release);
+            self.state_tx.send_if_modified(|s| {
+                if matches!(s, SessionState::Exited { .. }) || *s == next {
+                    false
+                } else {
+                    *s = next.clone();
+                    true
+                }
+            });
+        }
     }
 
     pub fn info(&self) -> SessionInfo {
@@ -809,6 +883,18 @@ async fn wait_for_needle(
             }
         }
     }
+}
+
+fn screen_matches_any_locked(parser: &vt100::Parser, patterns: &[Regex]) -> bool {
+    if patterns.is_empty() {
+        return false;
+    }
+    let (_, cols) = parser.screen().size();
+    let cols = cols.get();
+    parser.screen().rows(0, cols).any(|row| {
+        let trimmed = row.trim_end();
+        patterns.iter().any(|re| re.is_match(trimmed))
+    })
 }
 
 fn last_visible_line_from_parser(parser: &Mutex<vt100::Parser>) -> Option<String> {

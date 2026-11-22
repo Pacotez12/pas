@@ -52,6 +52,15 @@ pub fn default_waiting_patterns() -> BTreeMap<String, Vec<String>> {
     map
 }
 
+pub fn default_busy_patterns() -> BTreeMap<String, Vec<String>> {
+    let mut map = BTreeMap::new();
+    map.insert(
+        AgentKind::Agy.as_str().to_string(),
+        vec!["esc to cancel".to_string()],
+    );
+    map
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_true")]
@@ -64,6 +73,9 @@ pub struct Config {
     pub waiting_patterns: BTreeMap<String, Vec<String>>,
 
     #[serde(default)]
+    pub busy_patterns: BTreeMap<String, Vec<String>>,
+
+    #[serde(default)]
     pub worktrees_dir: Option<PathBuf>,
 }
 
@@ -73,6 +85,7 @@ impl Default for Config {
             notifications: true,
             quota_warn_percent: DEFAULT_QUOTA_WARN_PERCENT,
             waiting_patterns: default_waiting_patterns(),
+            busy_patterns: default_busy_patterns(),
             worktrees_dir: None,
         }
     }
@@ -88,6 +101,9 @@ struct RawConfig {
 
     #[serde(default)]
     waiting_patterns: BTreeMap<String, Vec<String>>,
+
+    #[serde(default)]
+    busy_patterns: BTreeMap<String, Vec<String>>,
 
     #[serde(default)]
     worktrees_dir: Option<PathBuf>,
@@ -137,10 +153,16 @@ impl Config {
             waiting_patterns.insert(agent, patterns);
         }
 
+        let mut busy_patterns = default_busy_patterns();
+        for (agent, patterns) in raw.busy_patterns {
+            busy_patterns.insert(agent, patterns);
+        }
+
         let cfg = Self {
             notifications: raw.notifications,
             quota_warn_percent: raw.quota_warn_percent,
             waiting_patterns,
+            busy_patterns,
             worktrees_dir: raw.worktrees_dir,
         };
         cfg.validate()?;
@@ -148,32 +170,49 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
-        for (agent, patterns) in &self.waiting_patterns {
-            for pattern in patterns {
-                Regex::new(pattern).map_err(|err| ConfigError::InvalidPattern {
-                    agent: agent.clone(),
-                    pattern: pattern.clone(),
-                    cause: err.to_string(),
-                })?;
-            }
-        }
+        validate_pattern_map(&self.waiting_patterns)?;
+        validate_pattern_map(&self.busy_patterns)?;
         Ok(())
     }
 
     pub fn compiled_waiting_patterns(&self, agent: AgentKind) -> Result<Vec<Regex>, ConfigError> {
-        let key = agent.as_str();
-        let Some(patterns) = self.waiting_patterns.get(key) else {
-            return Ok(Vec::new());
-        };
-        let mut compiled = Vec::with_capacity(patterns.len());
+        compile_patterns_for(&self.waiting_patterns, agent)
+    }
+
+    pub fn compiled_busy_patterns(&self, agent: AgentKind) -> Result<Vec<Regex>, ConfigError> {
+        compile_patterns_for(&self.busy_patterns, agent)
+    }
+}
+
+fn validate_pattern_map(map: &BTreeMap<String, Vec<String>>) -> Result<(), ConfigError> {
+    for (agent, patterns) in map {
         for pattern in patterns {
-            let re = Regex::new(pattern).map_err(|err| ConfigError::InvalidPattern {
-                agent: key.to_string(),
+            Regex::new(pattern).map_err(|err| ConfigError::InvalidPattern {
+                agent: agent.clone(),
                 pattern: pattern.clone(),
                 cause: err.to_string(),
             })?;
-            compiled.push(re);
         }
-        Ok(compiled)
     }
+    Ok(())
+}
+
+fn compile_patterns_for(
+    map: &BTreeMap<String, Vec<String>>,
+    agent: AgentKind,
+) -> Result<Vec<Regex>, ConfigError> {
+    let key = agent.as_str();
+    let Some(patterns) = map.get(key) else {
+        return Ok(Vec::new());
+    };
+    let mut compiled = Vec::with_capacity(patterns.len());
+    for pattern in patterns {
+        let re = Regex::new(pattern).map_err(|err| ConfigError::InvalidPattern {
+            agent: key.to_string(),
+            pattern: pattern.clone(),
+            cause: err.to_string(),
+        })?;
+        compiled.push(re);
+    }
+    Ok(compiled)
 }

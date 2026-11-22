@@ -446,3 +446,49 @@ agy = ["CONFIRMAR:$"]
         "se esperaba error en voseo, salió: {msg}"
     );
 }
+
+#[tokio::test]
+async fn config_busy_patterns_default_custom_and_invalid() {
+    let default_cfg = Config::default();
+    let agy_pats = default_cfg.compiled_busy_patterns(AgentKind::Agy).unwrap();
+    assert!(
+        agy_pats
+            .iter()
+            .any(|r| r.is_match("esc to cancel · 1 task(s) · /tasks")),
+        "default de agy debe matchear 'esc to cancel'"
+    );
+    assert!(
+        default_cfg
+            .compiled_busy_patterns(AgentKind::Claude)
+            .unwrap()
+            .is_empty()
+    );
+
+    let dir = tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    std::fs::write(
+        &cfg_path,
+        r#"
+[busy_patterns]
+agy = ["TRABAJANDO"]
+claude = ["Running tool"]
+"#,
+    )
+    .unwrap();
+    let cfg = Config::load_from_path(&cfg_path).unwrap();
+    let agy_custom = cfg.compiled_busy_patterns(AgentKind::Agy).unwrap();
+    assert!(agy_custom.iter().any(|r| r.is_match("TRABAJANDO...")));
+    assert!(!agy_custom.iter().any(|r| r.is_match("esc to cancel")));
+    let claude_custom = cfg.compiled_busy_patterns(AgentKind::Claude).unwrap();
+    assert!(claude_custom.iter().any(|r| r.is_match("Running tool")));
+
+    std::fs::write(
+        &cfg_path,
+        r#"
+[busy_patterns]
+agy = ["[invalido"]
+"#,
+    )
+    .unwrap();
+    assert!(Config::load_from_path(&cfg_path).is_err());
+}
