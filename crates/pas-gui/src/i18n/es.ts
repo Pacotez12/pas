@@ -2,7 +2,7 @@ export const es = {
   app: {
     name: "pas",
     searchTooltip: "Buscar sesiones (próximamente)",
-    settingsTooltip: "Ajustes (próximamente)",
+    settingsTooltip: "Cuentas",
   },
   sidebar: {
     newSession: "Nueva sesión",
@@ -16,6 +16,7 @@ export const es = {
   },
   sessionState: {
     running: "trabajando",
+    waiting: "esperando tu respuesta",
     idle: "inactivo",
     exitedOk: "terminó (0)",
     exitedError: (code: number | null) =>
@@ -58,6 +59,9 @@ export const es = {
     noProjectOption: "Sin proyecto (carpeta actual)",
     addProjectOption: "Agregar proyecto…",
     agentLabel: "Agente",
+    accountLabel: "Cuenta",
+    noAccountOption: "Sin cuenta (entorno del sistema)",
+    agySystemAccount: "Predeterminada (cuenta del sistema)",
     conversationLabel: "Conversación",
     newConversation: "Nueva conversación",
     loadingConversations: "Cargando conversaciones…",
@@ -109,6 +113,71 @@ export const es = {
     removeFromPas: "Quitar de pas",
     newGroup: "+ Nuevo grupo…",
   },
+  quota: {
+    noData: "sin datos",
+  },
+  accounts: {
+    title: "Cuentas",
+    back: "Volver",
+    addAccount: "Agregar cuenta",
+    hooksInstalled: "Hooks instalados",
+    noHooks: "Sin hooks",
+    installHooks: "Instalar hooks",
+    uninstallHooks: "Quitar hooks",
+    uninstallingHooks: "Quitando…",
+    moreActions: "Más acciones",
+    rename: "Renombrar…",
+    remove: "Quitar cuenta",
+    sourceOwned: "creada por pas",
+    sourceExisting: "existente",
+    agyDefaultName: "Predeterminada",
+    agySubtitle: "la cuenta del sistema · multi-cuenta todavía no disponible",
+    emptyAgent: (agentLabel: string) =>
+      `Todavía no agregaste cuentas de ${agentLabel}.`,
+    addDialog: {
+      title: "Agregar cuenta",
+      agentLabel: "Agente",
+      nameLabel: "Nombre",
+      namePlaceholder: "ej. Personal o Trabajo",
+      dirModeLabel: "Directorio de configuración",
+      dirModeNew: "Directorio nuevo",
+      dirModeExisting: "Usar uno existente",
+      dirModeNewHint:
+        "pas crea una carpeta aislada; después hacés login desde una sesión.",
+      existingDirLabel: "Ruta de la carpeta existente",
+      existingDirPlaceholder: "ej. ~/.config/orca/claude-profiles/…/home o ~/.codex",
+      cancel: "Cancelar",
+      submit: "Agregar cuenta",
+      submitting: "Agregando…",
+      errorEmptyName: "Escribí un nombre para la cuenta.",
+      errorEmptyDir: "Indicá la ruta de la carpeta existente.",
+    },
+    renameDialogTitle: "Renombrar cuenta",
+    removeDialog: {
+      title: (name: string) => `Quitar cuenta ${name}`,
+      bodyExisting:
+        "Se quita la cuenta de pas. La carpeta de configuración en disco no se borra.",
+      bodyOwned:
+        "Se quita la cuenta de pas. Podés conservar o borrar la carpeta que creó pas.",
+      deleteDirLabel: "Borrar también la carpeta de configuración",
+      cancel: "Cancelar",
+      submit: "Quitar",
+      submitting: "Quitando…",
+    },
+    hooksDialog: {
+      title: (accountLabel: string) => `Instalar hooks en ${accountLabel}`,
+      introWithStatusline:
+        "pas va a agregar sus hooks y envolver tu statusline en:",
+      introHooksOnly: "pas va a agregar sus hooks en:",
+      bulletBackup: (backupName: string) =>
+        `Antes se guarda un backup: ${backupName}.`,
+      bulletForeignUntouched: "Los hooks de Orca y herdr no se tocan.",
+      bulletNoopOutside: "Fuera de pas los hooks no hacen nada.",
+      cancel: "Cancelar",
+      submit: "Instalar",
+      submitting: "Instalando…",
+    },
+  },
   errors: {
     dismiss: "Cerrar aviso",
     loadFailed: (detail: string) =>
@@ -127,6 +196,11 @@ export const es = {
       killSession: "cerrar la sesión",
       removeSession: "cerrar la sesión",
       reopenSession: "reabrir la sesión",
+      addAccount: "agregar la cuenta",
+      renameAccount: "renombrar la cuenta",
+      removeAccount: "quitar la cuenta",
+      installHooks: "instalar los hooks",
+      uninstallHooks: "quitar los hooks",
     },
   },
 } as const;

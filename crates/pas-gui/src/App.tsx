@@ -3,11 +3,15 @@ import { AlertCircle, Plus, Search, Settings, X } from "lucide-react";
 import pasMarkUrl from "./assets/pas-mark-sin-broche.svg";
 import {
   api,
+  type AccountInfo,
+  type AgentKind,
   type ConnectionStatus,
   type GroupInfo,
   type ProjectInfo,
+  type Quota,
   type SessionInfo,
 } from "./api/pas";
+import { AccountsView } from "./components/AccountsView";
 import {
   NewSessionDialog,
   type NewSessionFormResult,
@@ -17,6 +21,7 @@ import { Sidebar } from "./components/Sidebar";
 import { SplitLayout } from "./components/SplitLayout";
 import { Tabs } from "./components/Tabs";
 import { es } from "./i18n/es";
+import { formatQuotaWindows, quotaPillLabel } from "./state/accounts";
 import {
   closeDialog,
   initialDialogState,
@@ -46,6 +51,12 @@ export function App() {
   const [groups, setGroups] = useState<GroupInfo[]>([]);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [accounts, setAccounts] = useState<AccountInfo[]>([]);
+  const [quotasByAccountId, setQuotasByAccountId] = useState<Map<string, Quota | null>>(
+    () => new Map(),
+  );
+  const [accountsViewOpen, setAccountsViewOpen] = useState(false);
+  const [defaultAgyDir, setDefaultAgyDir] = useState("~/.gemini");
   const [layout, setLayout] = useState<GuiLayout>({ tabs: [], activeTabId: null });
   const [layoutLoaded, setLayoutLoaded] = useState(false);
 
@@ -73,6 +84,10 @@ export function App() {
     () => new Map(sessions.map((s) => [s.id, s])),
     [sessions],
   );
+  const accountsById = useMemo(
+    () => new Map(accounts.map((a) => [a.id, a])),
+    [accounts],
+  );
 
   const activeTab = useMemo(
     () => layout.tabs.find((t) => t.id === layout.activeTabId) ?? null,
@@ -83,16 +98,30 @@ export function App() {
     ? sessionsById.get(activeSessionId) ?? null
     : null;
 
+  const refreshAccountsAndQuotas = useCallback(async () => {
+    const [nextAccounts, nextQuotas] = await Promise.all([
+      api.listAccounts(),
+      api.listQuotas(),
+    ]);
+    setAccounts(nextAccounts);
+    setQuotasByAccountId(new Map(nextQuotas.map((q) => [q.account_id, q.quota])));
+  }, []);
+
   const refreshState = useCallback(async (restoreSaved: boolean) => {
     try {
-      const [nextGroups, nextProjects, nextSessions] = await Promise.all([
-        api.listGroups(),
-        api.listProjects(),
-        api.listSessions(),
-      ]);
+      const [nextGroups, nextProjects, nextSessions, nextAccounts, nextQuotas] =
+        await Promise.all([
+          api.listGroups(),
+          api.listProjects(),
+          api.listSessions(),
+          api.listAccounts(),
+          api.listQuotas(),
+        ]);
       setGroups(nextGroups);
       setProjects(nextProjects);
       setSessions(nextSessions);
+      setAccounts(nextAccounts);
+      setQuotasByAccountId(new Map(nextQuotas.map((q) => [q.account_id, q.quota])));
       setConnection("connected");
 
       const aliveIds = nextSessions.map((s) => s.id);
@@ -119,6 +148,10 @@ export function App() {
 
   useEffect(() => {
     void refreshState(true);
+    void api
+      .defaultAgyDir()
+      .then((dir) => setDefaultAgyDir(dir))
+      .catch(() => {});
 
     let unlisteners: Array<() => void> = [];
     let cancelled = false;
@@ -149,14 +182,28 @@ export function App() {
           setLayout((prev) => closePane(prev, ev.id));
         }
       });
+      const u5 = await api.onFocusRequest((ev) => {
+        setAccountsViewOpen(false);
+        setLayout((prev) => openSessionTab(prev, ev.id));
+        setExtraFocusTick((n) => n + 1);
+      });
+      const u6 = await api.onQuotaChanged((ev) => {
+        setQuotasByAccountId((prev) => {
+          const next = new Map(prev);
+          next.set(ev.account_id, ev.quota);
+          return next;
+        });
+      });
 
       if (cancelled) {
         u1();
         u2();
         u3();
         u4();
+        u5();
+        u6();
       } else {
-        unlisteners = [u1, u2, u3, u4];
+        unlisteners = [u1, u2, u3, u4, u5, u6];
       }
     })();
 
@@ -240,12 +287,14 @@ export function App() {
   async function handleCreateSession(form: NewSessionFormResult) {
     const created = await api.createSession({
       projectId: form.projectId,
+      accountId: form.accountId,
       command: form.command,
       title: form.title,
       cwd: form.cwd,
     });
     const refreshed = await api.listSessions();
     setSessions(refreshed);
+    setAccountsViewOpen(false);
 
     const targetId = newSessionSplit.targetSessionId ?? activeSessionId;
     if (form.openInSplit && targetId) {
@@ -291,6 +340,7 @@ export function App() {
       await api.removeSession(sessionId);
       const created = await api.createSession({
         projectId: session.project_id,
+        accountId: session.account_id,
         command,
         title: session.title,
         cwd: session.cwd,
@@ -355,6 +405,54 @@ export function App() {
     await refreshProjectsAndGroups();
   }
 
+  async function handleAddAccount(params: {
+    agent: AgentKind;
+    name: string;
+    configDir?: string | null;
+  }) {
+    await api.addAccount(params);
+    await refreshAccountsAndQuotas();
+  }
+
+  async function handleRenameAccount(id: string, name: string) {
+    await api.renameAccount(id, name);
+    await refreshAccountsAndQuotas();
+  }
+
+  async function handleRemoveAccount(id: string, deleteDir: boolean) {
+    await api.removeAccount(id, deleteDir);
+    await refreshAccountsAndQuotas();
+  }
+
+  async function handleInstallAccountHooks(id: string) {
+    await api.installAccountHooks(id);
+    await refreshAccountsAndQuotas();
+  }
+
+  async function handleInstallDefaultAgyHooks(configDir: string) {
+    const existingAgy = accounts.find((a) => a.agent === "agy");
+    const target =
+      existingAgy ??
+      (await api.addAccount({
+        agent: "agy",
+        name: es.accounts.agyDefaultName,
+        configDir,
+      }));
+    await api.installAccountHooks(target.id);
+    await refreshAccountsAndQuotas();
+  }
+
+  async function handleUninstallAccountHooks(id: string) {
+    try {
+      await api.uninstallAccountHooks(id);
+      await refreshAccountsAndQuotas();
+    } catch (err) {
+      setErrorBanner(
+        es.errors.actionFailed(es.errors.actions.uninstallHooks, String(err)),
+      );
+    }
+  }
+
   const isDisconnected = connection === "disconnected";
 
   return (
@@ -373,20 +471,54 @@ export function App() {
         </button>
         <button
           type="button"
-          className="pas-icon-btn"
+          className={`pas-icon-btn${accountsViewOpen ? " is-active" : ""}`}
           title={es.app.settingsTooltip}
           aria-label={es.app.settingsTooltip}
+          aria-pressed={accountsViewOpen}
+          onClick={() => {
+            setAccountsViewOpen((prev) => {
+              const next = !prev;
+              if (next) {
+                void refreshAccountsAndQuotas().catch(() => {});
+              } else {
+                setExtraFocusTick((n) => n + 1);
+              }
+              return next;
+            });
+          }}
         >
           <Settings size={15} strokeWidth={2} />
         </button>
       </header>
 
       <div className={`pas-body${isDisconnected ? " is-dimmed" : ""}`}>
-        <Sidebar
-          groups={groups}
-          projects={projects}
-          sessions={sessions}
-          activeSessionId={activeSessionId}
+        {accountsViewOpen && (
+          <AccountsView
+            accounts={accounts}
+            defaultAgyDir={defaultAgyDir}
+            onBack={() => {
+              setAccountsViewOpen(false);
+              setExtraFocusTick((n) => n + 1);
+            }}
+            onAddAccount={handleAddAccount}
+            onRenameAccount={handleRenameAccount}
+            onRemoveAccount={handleRemoveAccount}
+            onInstallHooks={handleInstallAccountHooks}
+            onInstallDefaultAgyHooks={handleInstallDefaultAgyHooks}
+            onUninstallHooks={handleUninstallAccountHooks}
+          />
+        )}
+
+        <div
+          className="pas-workspace"
+          style={{ display: accountsViewOpen ? "none" : "flex" }}
+        >
+          <Sidebar
+            groups={groups}
+            projects={projects}
+            sessions={sessions}
+            accountsById={accountsById}
+            activeSessionId={activeSessionId}
           onNewSession={() => openNewSessionModal()}
           onSelectSession={(sessionId) =>
             setLayout((prev) => openSessionTab(prev, sessionId))
@@ -481,6 +613,7 @@ export function App() {
             })
           )}
         </main>
+        </div>
       </div>
 
       {isDisconnected && (
@@ -530,16 +663,56 @@ export function App() {
           </span>
         </span>
         {!isDisconnected && (
-          <span>{es.statusBar.sessionCount(sessions.length)}</span>
+          <span className="pas-statusbar-count">
+            {es.statusBar.sessionCount(sessions.length)}
+          </span>
         )}
         <span className="pas-spacer" />
-        {!isDisconnected && <span>{es.statusBar.shortcutsHint}</span>}
+        {!isDisconnected && accounts.length > 0 ? (
+          <div className="pas-quota-bar">
+            {accounts.map((acc) => {
+              const formatted = formatQuotaWindows(quotasByAccountId.get(acc.id));
+              return (
+                <span
+                  key={acc.id}
+                  className="pas-quota-pill"
+                  data-account-id={acc.id}
+                >
+                  <span className="pas-quota-label">{quotaPillLabel(acc)}</span>
+                  {formatted.hasData ? (
+                    formatted.windows.map((w) => (
+                      <b
+                        key={w.key}
+                        className={`pas-quota-val${
+                          w.level === "warn"
+                            ? " is-warn"
+                            : w.level === "high"
+                              ? " is-high"
+                              : ""
+                        }`}
+                      >
+                        {w.text}
+                      </b>
+                    ))
+                  ) : (
+                    <span className="pas-quota-nodata">{es.quota.noData}</span>
+                  )}
+                </span>
+              );
+            })}
+          </div>
+        ) : (
+          !isDisconnected && <span>{es.statusBar.shortcutsHint}</span>
+        )}
       </footer>
 
       <NewSessionDialog
         open={newSessionDialog.open}
         projects={projects}
+        accounts={accounts}
+        quotasByAccountId={quotasByAccountId}
         defaultProjectId={activeSession?.project_id ?? null}
+        defaultAccountId={activeSession?.account_id ?? null}
         selectedProjectIdOverride={pendingNewSessionProjectId}
         onConsumeProjectIdOverride={() => setPendingNewSessionProjectId(null)}
         onRequestAddProject={() => {

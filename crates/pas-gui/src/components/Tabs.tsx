@@ -15,6 +15,7 @@ interface TabsProps {
 export function statusDotClass(state: SessionState | undefined): string {
   if (!state) return "is-idle";
   if (state.state === "running") return "is-ok";
+  if (state.state === "waiting") return "is-wait";
   if (state.state === "idle") return "is-idle";
   return state.code === 0 ? "is-idle" : "is-err";
 }

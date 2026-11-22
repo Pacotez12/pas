@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use pas_core::protocol::{
-    ClaudeConversation, CreateParams, CreateResult, GroupInfo, ProjectInfo, SessionInfo,
-    SnapshotResult,
+    AccountInfo, AccountQuota, AgentKind, ClaudeConversation, CreateParams, CreateResult,
+    GroupInfo, ProjectInfo, SessionInfo, SnapshotResult,
 };
 use tauri::State;
 
@@ -88,9 +88,11 @@ pub async fn list_sessions(bridge: State<'_, Bridge>) -> Result<Vec<SessionInfo>
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn create_session(
     bridge: State<'_, Bridge>,
     project_id: Option<String>,
+    account_id: Option<String>,
     command: Vec<String>,
     title: Option<String>,
     cwd: String,
@@ -106,7 +108,7 @@ pub async fn create_session(
             cols: cols.unwrap_or(120),
             rows: rows.unwrap_or(40),
             project_id,
-            account_id: None,
+            account_id,
         })
         .await
         .map_err(|e| e.to_string())
@@ -126,11 +128,96 @@ pub async fn remove_session(bridge: State<'_, Bridge>, id: String) -> Result<(),
 pub async fn claude_conversations(
     bridge: State<'_, Bridge>,
     cwd: String,
+    account_id: Option<String>,
 ) -> Result<Vec<ClaudeConversation>, String> {
     bridge
-        .claude_conversations(PathBuf::from(cwd))
+        .claude_conversations(PathBuf::from(cwd), account_id)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_accounts(bridge: State<'_, Bridge>) -> Result<Vec<AccountInfo>, String> {
+    bridge.list_accounts().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_account(
+    bridge: State<'_, Bridge>,
+    agent: AgentKind,
+    name: String,
+    config_dir: Option<String>,
+) -> Result<AccountInfo, String> {
+    let dir = config_dir
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    bridge
+        .add_account(agent, name, dir)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn rename_account(
+    bridge: State<'_, Bridge>,
+    id: String,
+    name: String,
+) -> Result<AccountInfo, String> {
+    bridge
+        .rename_account(id, name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn remove_account(
+    bridge: State<'_, Bridge>,
+    id: String,
+    delete_dir: bool,
+) -> Result<(), String> {
+    bridge
+        .remove_account(id, delete_dir)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn install_account_hooks(
+    bridge: State<'_, Bridge>,
+    id: String,
+) -> Result<AccountInfo, String> {
+    bridge
+        .install_account_hooks(id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn uninstall_account_hooks(
+    bridge: State<'_, Bridge>,
+    id: String,
+) -> Result<AccountInfo, String> {
+    bridge
+        .uninstall_account_hooks(id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_quotas(bridge: State<'_, Bridge>) -> Result<Vec<AccountQuota>, String> {
+    bridge.list_quotas().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn default_agy_dir() -> Result<String, String> {
+    if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(home)
+            .join(".gemini")
+            .to_string_lossy()
+            .into_owned());
+    }
+    Err("No se encontró HOME para ubicar la carpeta de agy.".into())
 }
 
 #[tauri::command]

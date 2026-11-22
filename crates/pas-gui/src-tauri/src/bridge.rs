@@ -7,12 +7,16 @@ use pas_core::CoreError;
 use pas_core::autostart::connect_or_spawn;
 use pas_core::client::Client;
 use pas_core::protocol::{
-    ClaudeConversation, ClaudeConversationsParams, CreateParams, CreateResult,
-    ERR_SESSION_NOT_FOUND, EVENT_SESSION_CREATED, EVENT_SESSION_OUTPUT, EVENT_SESSION_REMOVED,
-    EVENT_SESSION_STATE, GroupCreateParams, GroupInfo, GroupRenameParams, IdParams, InputParams,
-    METHOD_CLAUDE_CONVERSATIONS, METHOD_GROUP_CREATE, METHOD_GROUP_LIST, METHOD_GROUP_RENAME,
-    METHOD_PROJECT_ADD, METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE, METHOD_PROJECT_REMOVE,
-    METHOD_PROJECT_RENAME, METHOD_PROJECT_UNPIN, METHOD_SESSION_CREATE, METHOD_SESSION_INPUT,
+    AccountAddParams, AccountInfo, AccountQuota, AccountRemoveParams, AccountRenameParams,
+    AgentKind, ClaudeConversation, ClaudeConversationsParams, CreateParams, CreateResult,
+    ERR_SESSION_NOT_FOUND, EVENT_QUOTA_CHANGED, EVENT_QUOTA_WARNING, EVENT_SESSION_CREATED,
+    EVENT_SESSION_FOCUS_REQUEST, EVENT_SESSION_OUTPUT, EVENT_SESSION_REMOVED, EVENT_SESSION_STATE,
+    GroupCreateParams, GroupInfo, GroupRenameParams, IdParams, InputParams, METHOD_ACCOUNT_ADD,
+    METHOD_ACCOUNT_INSTALL_HOOKS, METHOD_ACCOUNT_LIST, METHOD_ACCOUNT_REMOVE,
+    METHOD_ACCOUNT_RENAME, METHOD_ACCOUNT_UNINSTALL_HOOKS, METHOD_CLAUDE_CONVERSATIONS,
+    METHOD_GROUP_CREATE, METHOD_GROUP_LIST, METHOD_GROUP_RENAME, METHOD_PROJECT_ADD,
+    METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE, METHOD_PROJECT_REMOVE, METHOD_PROJECT_RENAME,
+    METHOD_PROJECT_UNPIN, METHOD_QUOTA_LIST, METHOD_SESSION_CREATE, METHOD_SESSION_INPUT,
     METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_REMOVE, METHOD_SESSION_RESIZE,
     METHOD_SESSION_SNAPSHOT, METHOD_SESSION_SUBSCRIBE, METHOD_SESSION_SUBSCRIBE_ALL,
     METHOD_SESSION_UNSUBSCRIBE, Notification, ProjectAddParams, ProjectInfo, ProjectMoveParams,
@@ -29,6 +33,9 @@ pub const FRONTEND_EVENT_SNAPSHOT: &str = "pas://snapshot";
 pub const FRONTEND_EVENT_STATE: &str = "pas://state";
 pub const FRONTEND_EVENT_CREATED: &str = "pas://created";
 pub const FRONTEND_EVENT_REMOVED: &str = "pas://removed";
+pub const FRONTEND_EVENT_FOCUS_REQUEST: &str = "pas://focus_request";
+pub const FRONTEND_EVENT_QUOTA_CHANGED: &str = "pas://quota_changed";
+pub const FRONTEND_EVENT_QUOTA_WARNING: &str = "pas://quota_warning";
 pub const FRONTEND_EVENT_CONNECTION: &str = "pas://connection";
 
 const BACKOFF_MS: &[u64] = &[250, 500, 1_000, 2_000, 5_000];
@@ -182,9 +189,60 @@ impl Bridge {
     pub async fn claude_conversations(
         &self,
         cwd: PathBuf,
+        account_id: Option<String>,
     ) -> Result<Vec<ClaudeConversation>, CoreError> {
-        self.call(METHOD_CLAUDE_CONVERSATIONS, ClaudeConversationsParams { cwd })
+        self.call(
+            METHOD_CLAUDE_CONVERSATIONS,
+            ClaudeConversationsParams { cwd, account_id },
+        )
+        .await
+    }
+
+    pub async fn list_accounts(&self) -> Result<Vec<AccountInfo>, CoreError> {
+        self.call(METHOD_ACCOUNT_LIST, json!({})).await
+    }
+
+    pub async fn add_account(
+        &self,
+        agent: AgentKind,
+        name: String,
+        config_dir: Option<PathBuf>,
+    ) -> Result<AccountInfo, CoreError> {
+        self.call(
+            METHOD_ACCOUNT_ADD,
+            AccountAddParams {
+                agent,
+                name,
+                config_dir,
+            },
+        )
+        .await
+    }
+
+    pub async fn rename_account(&self, id: String, name: String) -> Result<AccountInfo, CoreError> {
+        self.call(METHOD_ACCOUNT_RENAME, AccountRenameParams { id, name })
             .await
+    }
+
+    pub async fn remove_account(&self, id: String, delete_dir: bool) -> Result<(), CoreError> {
+        let _: Value = self
+            .call(METHOD_ACCOUNT_REMOVE, AccountRemoveParams { id, delete_dir })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn install_account_hooks(&self, id: String) -> Result<AccountInfo, CoreError> {
+        self.call(METHOD_ACCOUNT_INSTALL_HOOKS, IdParams { id })
+            .await
+    }
+
+    pub async fn uninstall_account_hooks(&self, id: String) -> Result<AccountInfo, CoreError> {
+        self.call(METHOD_ACCOUNT_UNINSTALL_HOOKS, IdParams { id })
+            .await
+    }
+
+    pub async fn list_quotas(&self) -> Result<Vec<AccountQuota>, CoreError> {
+        self.call(METHOD_QUOTA_LIST, json!({})).await
     }
 
     pub async fn session_input(&self, id: String, data_b64: String) -> Result<(), CoreError> {
@@ -445,6 +503,9 @@ fn forward_notification(
             }
             sink.emit(FRONTEND_EVENT_REMOVED, notif.params);
         }
+        EVENT_SESSION_FOCUS_REQUEST => sink.emit(FRONTEND_EVENT_FOCUS_REQUEST, notif.params),
+        EVENT_QUOTA_CHANGED => sink.emit(FRONTEND_EVENT_QUOTA_CHANGED, notif.params),
+        EVENT_QUOTA_WARNING => sink.emit(FRONTEND_EVENT_QUOTA_WARNING, notif.params),
         other => {
             tracing::debug!("notificación desconocida de pasd: {other}");
         }

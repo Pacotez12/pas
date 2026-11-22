@@ -15,7 +15,7 @@ const env = {
   CARGO_TARGET_DIR: targetDir,
 };
 
-execFileSync("cargo", ["build", "-p", "pasd", "-p", "fake-agent"], {
+execFileSync("cargo", ["build", "-p", "pasd", "-p", "pas-cli", "-p", "fake-agent"], {
   cwd: repoRoot,
   env,
   stdio: "inherit",

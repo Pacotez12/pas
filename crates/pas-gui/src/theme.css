@@ -138,12 +138,24 @@ select:focus-visible {
   transform: scale(0.95);
 }
 
+.pas-icon-btn.is-active {
+  background: var(--panel-elevated);
+  color: var(--acc);
+}
+
 /* Body */
 .pas-body {
   flex: 1;
   min-height: 0;
   display: flex;
   transition: opacity 200ms ease, filter 200ms ease;
+}
+
+.pas-workspace {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
 }
 
 .pas-body.is-dimmed {
@@ -393,6 +405,7 @@ select:focus-visible {
 
 .pas-dot.is-wait {
   background: var(--wait);
+  box-shadow: 0 0 0 3px rgba(240, 163, 94, 0.18);
 }
 
 .pas-dot.is-idle {
@@ -728,22 +741,77 @@ select:focus-visible {
 
 /* Status bar */
 .pas-statusbar {
-  height: 24px;
+  height: 30px;
   flex: none;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   padding: 0 12px;
   border-top: 1px solid var(--line);
   background: var(--panel);
   color: var(--mu);
   font-size: 11px;
+  overflow: hidden;
 }
 
 .pas-statusbar-conn {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: none;
+  white-space: nowrap;
+}
+
+.pas-statusbar-count {
+  flex: none;
+  white-space: nowrap;
+}
+
+.pas-quota-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.pas-quota-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.pas-quota-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--mu);
+  white-space: nowrap;
+  flex: none;
+}
+
+.pas-quota-label {
+  color: var(--mu);
+}
+
+.pas-quota-val {
+  font-weight: 500;
+  color: #c8c8d2;
+}
+
+.pas-quota-val.is-warn {
+  color: #f0c25e;
+}
+
+.pas-quota-val.is-high {
+  color: var(--err);
+}
+
+.pas-quota-nodata {
+  color: var(--mu);
+  opacity: 0.85;
 }
 
 /* Disconnected banner */
@@ -816,6 +884,10 @@ select:focus-visible {
   width: 460px;
 }
 
+.pas-dialog-card.is-hooks {
+  width: 470px;
+}
+
 @starting-style {
   .pas-dialog-card {
     opacity: 0;
@@ -876,6 +948,17 @@ select:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pas-select-inline-quota {
+  color: var(--mu);
+  margin-left: 8px;
+  font-size: 11.5px;
+}
+
+.pas-select-trigger:disabled {
+  opacity: 0.7;
+  cursor: default;
 }
 
 .pas-select-chevron {
@@ -1037,6 +1120,180 @@ select:focus-visible {
     background: var(--acc);
     filter: brightness(1.06);
   }
+}
+
+.pas-btn.is-danger {
+  border-color: var(--banner-border);
+  background: var(--banner-bg);
+  color: var(--banner-tx);
+  font-weight: 500;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .pas-btn.is-danger:hover {
+    filter: brightness(1.1);
+  }
+}
+
+.pas-btn-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pas-btn-icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.pas-input-mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.pas-field-hint {
+  margin: 0 0 10px;
+  color: var(--mu);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* Accounts view */
+.pas-accounts-view {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.pas-accounts-inner {
+  padding: 16px 20px 28px;
+  max-width: 760px;
+}
+
+.pas-accounts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.pas-accounts-header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--tx-strong);
+}
+
+.pas-acc-group {
+  margin-bottom: 10px;
+}
+
+.pas-acc-group-title {
+  padding: 8px 0 2px;
+  color: var(--mu);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.pas-acc-empty {
+  margin: 4px 0 8px;
+  color: var(--mu);
+  font-size: 12px;
+}
+
+.pas-acc-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  margin: 6px 0;
+  background: var(--panel);
+}
+
+.pas-acc-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.pas-acc-info b {
+  color: var(--tx-strong);
+  font-weight: 600;
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pas-acc-info small {
+  color: var(--mu);
+  font-size: 11.5px;
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pas-tag {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--mu);
+  white-space: nowrap;
+  flex: none;
+}
+
+.pas-tag.is-ok {
+  color: var(--ok);
+  border-color: #2c4a37;
+}
+
+.pas-accounts-footer {
+  margin-top: 14px;
+}
+
+.pas-acc-overflow-menu {
+  width: 180px;
+}
+
+/* Hooks confirmation dialog */
+.pas-hooks-intro {
+  color: #c8c8d2;
+  line-height: 1.5;
+  margin: 0 0 8px;
+  font-size: 12.5px;
+}
+
+.pas-hooks-path {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 7px 9px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--tx);
+  white-space: normal;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.pas-hooks-list {
+  color: var(--mu);
+  line-height: 1.6;
+  padding-left: 18px;
+  margin: 10px 0 0;
+  font-size: 12.5px;
 }
 
 .pas-btn:disabled {

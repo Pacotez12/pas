@@ -11,6 +11,7 @@ export const REPO_ROOT = path.resolve(__dirname, "../../..");
 export const E2E_TARGET_DEBUG = path.join(REPO_ROOT, "target/e2e/debug");
 export const PAS_GUI_BIN = path.join(E2E_TARGET_DEBUG, "pas-gui");
 export const PASD_BIN = path.join(E2E_TARGET_DEBUG, "pasd");
+export const PAS_CLI_BIN = path.join(E2E_TARGET_DEBUG, "pas");
 export const FAKE_AGENT_BIN = path.join(E2E_TARGET_DEBUG, "fake-agent");
 export const TAURI_DRIVER_BIN =
   process.env.TAURI_DRIVER_BIN || path.join(os.homedir(), ".cargo/bin/tauri-driver");
@@ -21,6 +22,7 @@ function ensurePrerequisites() {
   const required = [
     ["pas-gui", PAS_GUI_BIN],
     ["pasd", PASD_BIN],
+    ["pas", PAS_CLI_BIN],
     ["fake-agent", FAKE_AGENT_BIN],
     ["tauri-driver", TAURI_DRIVER_BIN],
     ["WebKitWebDriver", NATIVE_DRIVER_BIN],
@@ -140,6 +142,7 @@ async function waitForTcpPort(port: number, timeoutMs = 5_000): Promise<void> {
 
 export interface E2EContextOptions {
   pasdBinOverride?: string;
+  extraPathDir?: string;
 }
 
 export class E2EContext {
@@ -149,6 +152,7 @@ export class E2EContext {
   readonly pasDataDir: string;
   readonly layoutFile: string;
   private readonly pasdBinOverride?: string;
+  private extraPathDirs: string[] = [];
 
   private pasdProc: ChildProcess | null = null;
   private pasdPid: number | null = null;
@@ -166,6 +170,9 @@ export class E2EContext {
     this.pasDataDir = path.join(this.xdgDataHome, "pas");
     this.layoutFile = path.join(this.pasDataDir, "gui-layout.json");
     this.pasdBinOverride = opts.pasdBinOverride;
+    if (opts.extraPathDir) {
+      this.extraPathDirs.push(opts.extraPathDir);
+    }
     fs.mkdirSync(this.pasDataDir, { recursive: true });
 
     this.signalHandler = () => {
@@ -183,11 +190,30 @@ export class E2EContext {
     return repoPath;
   }
 
+  createFakeAgentAlias(binName: string): string {
+    const binDir = path.join(this.tmpDir, "fake-bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const target = path.join(binDir, binName);
+    fs.writeFileSync(target, `#!/bin/sh\nexec "${FAKE_AGENT_BIN}" "$@"\n`, {
+      mode: 0o755,
+    });
+    if (!this.extraPathDirs.includes(binDir)) {
+      this.extraPathDirs.push(binDir);
+    }
+    return binDir;
+  }
+
   private baseEnv(): NodeJS.ProcessEnv {
+    const currentPath = process.env.PATH ?? "";
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       PAS_SOCKET: this.socketPath,
+      PAS_BIN: PAS_CLI_BIN,
       XDG_DATA_HOME: this.xdgDataHome,
+      PATH:
+        this.extraPathDirs.length > 0
+          ? `${this.extraPathDirs.join(":")}:${currentPath}`
+          : currentPath,
     };
     if (this.pasdBinOverride) {
       env.PAS_PASD_BIN = this.pasdBinOverride;

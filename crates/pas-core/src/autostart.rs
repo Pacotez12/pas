@@ -36,9 +36,18 @@ pub async fn connect_or_spawn(path: &Path) -> Result<Client, CoreError> {
         });
     }
 
-    if cmd.spawn().is_err() {
-        return Err(CoreError::NotRunning);
-    }
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(_) => return Err(CoreError::NotRunning),
+    };
+
+    // Reaprovechar el hijo al terminar para evitar que quede `[pasd] <defunct>` si muere
+    // mientras la GUI sigue corriendo.
+    let _ = std::thread::Builder::new()
+        .name("pasd-reaper".into())
+        .spawn(move || {
+            let _ = child.wait();
+        });
 
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {

@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type SessionState =
   | { state: "running" }
+  | { state: "waiting" }
   | { state: "idle" }
   | { state: "exited"; code: number | null };
 
@@ -14,6 +15,52 @@ export interface SessionInfo {
   state: SessionState;
   created_at: number;
   project_id: string | null;
+  account_id: string | null;
+}
+
+export type AgentKind = "claude" | "codex" | "agy";
+
+export interface AccountInfo {
+  id: string;
+  agent: AgentKind;
+  name: string;
+  config_dir: string;
+  owned: boolean;
+  created_at: number;
+  hooks_installed: boolean;
+}
+
+export interface QuotaWindow {
+  used_percent: number;
+  resets_at: number;
+}
+
+export interface Quota {
+  five_h: QuotaWindow | null;
+  week: QuotaWindow | null;
+  updated_at: number;
+}
+
+export interface AccountQuota {
+  account_id: string;
+  quota: Quota | null;
+}
+
+export interface QuotaChangedEvent {
+  account_id: string;
+  quota: Quota;
+}
+
+export interface QuotaWarningEvent {
+  account_id: string;
+  window: "five_h" | "week";
+  used_percent: number;
+  resets_at: number;
+  threshold_percent: number;
+}
+
+export interface SessionFocusRequestEvent {
+  id: string;
 }
 
 export interface ProjectInfo {
@@ -75,6 +122,7 @@ export const api = {
   listSessions: () => invoke<SessionInfo[]>("list_sessions"),
   createSession: (params: {
     projectId: string | null;
+    accountId?: string | null;
     command: string[];
     title: string | null;
     cwd: string;
@@ -83,6 +131,7 @@ export const api = {
   }) =>
     invoke<{ id: string }>("create_session", {
       projectId: params.projectId,
+      accountId: params.accountId ?? null,
       command: params.command,
       title: params.title,
       cwd: params.cwd,
@@ -91,8 +140,34 @@ export const api = {
     }),
   killSession: (id: string) => invoke<void>("kill_session", { id }),
   removeSession: (id: string) => invoke<void>("remove_session", { id }),
-  claudeConversations: (cwd: string) =>
-    invoke<ClaudeConversation[]>("claude_conversations", { cwd }),
+  claudeConversations: (cwd: string, accountId?: string | null) =>
+    invoke<ClaudeConversation[]>("claude_conversations", {
+      cwd,
+      accountId: accountId ?? null,
+    }),
+
+  listAccounts: () => invoke<AccountInfo[]>("list_accounts"),
+  addAccount: (params: {
+    agent: AgentKind;
+    name: string;
+    configDir?: string | null;
+  }) =>
+    invoke<AccountInfo>("add_account", {
+      agent: params.agent,
+      name: params.name,
+      configDir: params.configDir ?? null,
+    }),
+  renameAccount: (id: string, name: string) =>
+    invoke<AccountInfo>("rename_account", { id, name }),
+  removeAccount: (id: string, deleteDir: boolean) =>
+    invoke<void>("remove_account", { id, deleteDir }),
+  installAccountHooks: (id: string) =>
+    invoke<AccountInfo>("install_account_hooks", { id }),
+  uninstallAccountHooks: (id: string) =>
+    invoke<AccountInfo>("uninstall_account_hooks", { id }),
+  listQuotas: () => invoke<AccountQuota[]>("list_quotas"),
+  defaultAgyDir: () => invoke<string>("default_agy_dir"),
+
   sessionInput: (id: string, dataB64: string) =>
     invoke<void>("session_input", { id, dataB64 }),
   sessionResize: (id: string, cols: number, rows: number) =>
@@ -115,6 +190,14 @@ export const api = {
     listen<SessionCreatedEvent>("pas://created", (e) => cb(e.payload)),
   onRemoved: (cb: (ev: SessionRemovedEvent) => void): Promise<UnlistenFn> =>
     listen<SessionRemovedEvent>("pas://removed", (e) => cb(e.payload)),
+  onFocusRequest: (
+    cb: (ev: SessionFocusRequestEvent) => void,
+  ): Promise<UnlistenFn> =>
+    listen<SessionFocusRequestEvent>("pas://focus_request", (e) => cb(e.payload)),
+  onQuotaChanged: (cb: (ev: QuotaChangedEvent) => void): Promise<UnlistenFn> =>
+    listen<QuotaChangedEvent>("pas://quota_changed", (e) => cb(e.payload)),
+  onQuotaWarning: (cb: (ev: QuotaWarningEvent) => void): Promise<UnlistenFn> =>
+    listen<QuotaWarningEvent>("pas://quota_warning", (e) => cb(e.payload)),
   onConnection: (cb: (status: ConnectionStatus) => void): Promise<UnlistenFn> =>
     listen<ConnectionStatus>("pas://connection", (e) => cb(e.payload)),
 };

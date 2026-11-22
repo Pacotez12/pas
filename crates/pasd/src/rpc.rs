@@ -120,7 +120,21 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
         }
         METHOD_CLAUDE_CONVERSATIONS => {
             let params: ClaudeConversationsParams = parse_params(req.params)?;
-            ok_json(claude::list_conversations(&params.cwd))
+            let account_id = params
+                .account_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty());
+            let convs = if let Some(account_id) = account_id {
+                let account = mgr
+                    .store()
+                    .get_account(account_id)
+                    .map_err(store_error_to_rpc)?;
+                claude::list_conversations_in(&account.config_dir, &params.cwd)
+            } else {
+                claude::list_conversations(&params.cwd)
+            };
+            ok_json(convs)
         }
         METHOD_PROJECT_ADD => {
             let params: ProjectAddParams = parse_params(req.params)?;

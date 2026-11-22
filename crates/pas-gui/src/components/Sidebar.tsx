@@ -5,7 +5,13 @@ import {
   Folder,
   Plus,
 } from "lucide-react";
-import type { GroupInfo, ProjectInfo, SessionInfo, SessionState } from "../api/pas";
+import type {
+  AccountInfo,
+  GroupInfo,
+  ProjectInfo,
+  SessionInfo,
+  SessionState,
+} from "../api/pas";
 import { es } from "../i18n/es";
 import { statusDotClass } from "./Tabs";
 
@@ -13,6 +19,7 @@ interface SidebarProps {
   groups: GroupInfo[];
   projects: ProjectInfo[];
   sessions: SessionInfo[];
+  accountsById: Map<string, AccountInfo>;
   activeSessionId: string | null;
   onNewSession: () => void;
   onSelectSession: (sessionId: string) => void;
@@ -40,6 +47,7 @@ interface GroupContextState {
 
 function sessionStateLabel(state: SessionState): string {
   if (state.state === "running") return es.sessionState.running;
+  if (state.state === "waiting") return es.sessionState.waiting;
   if (state.state === "idle") return es.sessionState.idle;
   if (state.code === 0) return es.sessionState.exitedOk;
   return es.sessionState.exitedError(state.code);
@@ -64,6 +72,7 @@ export function Sidebar({
   groups,
   projects,
   sessions,
+  accountsById,
   activeSessionId,
   onNewSession,
   onSelectSession,
@@ -139,11 +148,17 @@ export function Sidebar({
 
   function renderSession(session: SessionInfo, indentClass: "is-sub" | "is-sub0" | "") {
     const isActive = session.id === activeSessionId;
+    const account = session.account_id
+      ? accountsById.get(session.account_id)
+      : undefined;
+    const stateLabel = sessionStateLabel(session.state);
+    const metaText = account ? `${account.name} · ${stateLabel}` : stateLabel;
     return (
       <button
         key={session.id}
         type="button"
         className={`pas-ses${indentClass ? ` ${indentClass}` : ""}${isActive ? " is-active" : ""}`}
+        data-session-id={session.id}
         onClick={() => onSelectSession(session.id)}
       >
         <span className={`pas-dot ${statusDotClass(session.state)}`} />
@@ -151,7 +166,7 @@ export function Sidebar({
           <span className="pas-ses-title" style={{ display: "block" }}>
             {session.title}
           </span>
-          <small className="pas-ses-meta">{sessionStateLabel(session.state)}</small>
+          <small className="pas-ses-meta">{metaText}</small>
         </span>
       </button>
     );

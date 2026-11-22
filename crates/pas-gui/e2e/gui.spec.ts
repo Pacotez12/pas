@@ -1,7 +1,10 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   E2EContext,
+  PAS_CLI_BIN,
   addProjectViaUi,
   openFakeAgentSessionViaUi,
   readTextContent,
@@ -250,6 +253,163 @@ describe("pas-gui e2e", () => {
 
       const status = await browser.$(".pas-statusbar").getText();
       expect(status).toContain("1 sesión");
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  it("crea una cuenta en tempdir, abre sesión con esa cuenta y muestra punto naranja al simular hook", async () => {
+    const ctx = new E2EContext();
+    try {
+      const repoPath = ctx.createGitRepo("proyecto-cuenta");
+      const accountDir = path.join(ctx.tmpDir, "fake-claude-account");
+      fs.mkdirSync(accountDir, { recursive: true });
+      ctx.createFakeAgentAlias("claude");
+
+      await ctx.startPasd();
+      const browser = await ctx.openApp();
+
+      await addProjectViaUi(browser, repoPath);
+
+      // Abrir pantalla Cuentas desde el engranaje.
+      await browser.$('button[aria-label="Cuentas"]').click();
+      await browser.$(".pas-accounts-view").waitForDisplayed({ timeout: 10_000 });
+
+      // Agregar cuenta apuntando al tempdir.
+      await browser.$(".pas-accounts-footer button").click();
+      const nameInput = await browser.$("#acc-name");
+      await nameInput.waitForDisplayed({ timeout: 10_000 });
+      await nameInput.setValue("Personal");
+
+      const dirRadios = await browser.$$('.pas-dialog-card button[role="radio"]');
+      for (const radio of dirRadios) {
+        if ((await radio.getText()).includes("Usar uno existente")) {
+          await radio.click();
+          break;
+        }
+      }
+      const dirInput = await browser.$("#acc-dir");
+      await dirInput.waitForDisplayed({ timeout: 10_000 });
+      await dirInput.setValue(accountDir);
+
+      await browser.$('.pas-dialog-card button[type="submit"]').click();
+      await browser.waitUntil(
+        async () =>
+          browser.execute(() => document.querySelector(".pas-dialog-backdrop") === null),
+        { timeout: 10_000, interval: 50 },
+      );
+
+      // Verificar cuenta en la pantalla Cuentas y pastilla de cuota en la barra inferior.
+      await browser.waitUntil(
+        async () =>
+          (await readTextContent(browser, ".pas-accounts-view")).includes("Personal") &&
+          (await readTextContent(browser, ".pas-statusbar")).includes("Claude · Personal") &&
+          (await readTextContent(browser, ".pas-statusbar")).includes("sin datos"),
+        { timeout: 10_000, timeoutMsg: "La cuenta o su pastilla de cuota no aparecieron." },
+      );
+
+      // Verificar diálogo de confirmación de hooks con la ruta exacta (sin instalar fuera del tempdir).
+      const installButtons = await browser.$$(".pas-acc-card button.is-primary");
+      expect(installButtons.length).toBe(2);
+      await installButtons[0].click();
+      await browser.$(".pas-hooks-path").waitForDisplayed({ timeout: 10_000 });
+      const hooksPathText = await readTextContent(browser, ".pas-hooks-path");
+      expect(hooksPathText).toBe(path.join(accountDir, "settings.json"));
+      await browser.$(".pas-dialog-actions button:first-child").click();
+      await browser.waitUntil(
+        async () =>
+          browser.execute(() => document.querySelector(".pas-dialog-backdrop") === null),
+        { timeout: 10_000, interval: 50 },
+      );
+
+      // Verificar que la fila de agy (Predeterminada) tenga botón Instalar hooks.
+      const agyInstallBtn = await browser.$(
+        '[data-agent-group="agy"] .pas-acc-card button.is-primary',
+      );
+      expect(await agyInstallBtn.isExisting()).toBe(true);
+      expect(await agyInstallBtn.getText()).toContain("Instalar hooks");
+
+      // Volver al workspace.
+      await browser.$(".pas-accounts-header button").click();
+      await browser.$(".pas-sidebar").waitForDisplayed({ timeout: 10_000 });
+
+      // Abrir sesión de Claude Code con la cuenta Personal.
+      await browser.$(".pas-new-btn").click();
+      await browser.$(".pas-dialog-card").waitForDisplayed({ timeout: 10_000 });
+      const accountComboText = await readTextContent(
+        browser,
+        'button[aria-labelledby="ns-account-label"]',
+      );
+      expect(accountComboText).toContain("Personal");
+
+      await browser.$('.pas-dialog-card button[type="submit"]').click();
+      await browser.waitUntil(
+        async () =>
+          browser.execute(() => document.querySelector(".pas-dialog-backdrop") === null),
+        { timeout: 10_000, interval: 50 },
+      );
+
+      await waitForPaneText(browser, 0, "fake-agent listo");
+
+      const sessionId = await browser.$(".pas-pane").getAttribute("data-session-id");
+      expect(sessionId).toBeTruthy();
+
+      // Simular hook PermissionRequest con pas hook y PAS_SESSION_ID.
+      execFileSync(PAS_CLI_BIN, ["hook", "claude", "PermissionRequest"], {
+        env: {
+          ...process.env,
+          PAS_SESSION_ID: sessionId,
+          PAS_SOCKET: ctx.socketPath,
+        },
+        input: "{}",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      // Confirmar punto naranja en sidebar y pestaña + texto "Personal · esperando tu respuesta".
+      await browser.waitUntil(
+        async () => {
+          const sidebarHasWaitDot = await browser
+            .$(`.pas-sidebar .pas-ses[data-session-id="${sessionId}"] .pas-dot.is-wait`)
+            .isExisting();
+          const tabHasWaitDot = await browser
+            .$(".pas-tabs .pas-tab.is-active .pas-dot.is-wait")
+            .isExisting();
+          const metaText = await readTextContent(
+            browser,
+            `.pas-sidebar .pas-ses[data-session-id="${sessionId}"] .pas-ses-meta`,
+          );
+          return (
+            sidebarHasWaitDot &&
+            tabHasWaitDot &&
+            metaText.includes("Personal · esperando tu respuesta")
+          );
+        },
+        {
+          timeout: 10_000,
+          interval: 100,
+          timeoutMsg:
+            "No apareció el punto naranja ni el texto 'Personal · esperando tu respuesta'.",
+        },
+      );
+
+      // Simular UserPromptSubmit y confirmar vuelta a trabajando.
+      execFileSync(PAS_CLI_BIN, ["hook", "claude", "UserPromptSubmit"], {
+        env: {
+          ...process.env,
+          PAS_SESSION_ID: sessionId,
+          PAS_SOCKET: ctx.socketPath,
+        },
+        input: "{}",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      await browser.waitUntil(
+        async () =>
+          browser
+            .$(`.pas-sidebar .pas-ses[data-session-id="${sessionId}"] .pas-dot.is-ok`)
+            .isExisting(),
+        { timeout: 10_000, interval: 100 },
+      );
     } finally {
       await ctx.cleanup();
     }
