@@ -41,6 +41,7 @@ fn params_for(cmd: Vec<String>) -> CreateParams {
         cols: 120,
         rows: 40,
         project_id: None,
+        account_id: None,
     }
 }
 

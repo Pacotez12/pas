@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use pas_core::protocol::{
@@ -7,9 +8,12 @@ use pas_core::protocol::{
     EVENT_SESSION_REMOVED, EVENT_SESSION_STATE, Notification, RpcError, SessionCreatedEvent,
     SessionInfo, SessionRemovedEvent, SessionState, SessionStateEvent,
 };
+use pas_core::socket::socket_path as default_socket_path;
 use serde_json::json;
 use tokio::sync::broadcast;
 
+use crate::accounts;
+use crate::rpc::store_error_to_rpc;
 use crate::session::{Session, SessionError};
 use crate::store::Store;
 
@@ -21,6 +25,8 @@ pub struct Manager {
     sessions: RwLock<HashMap<String, Arc<Session>>>,
     events_tx: broadcast::Sender<Notification>,
     store: Store,
+    accounts_dir: Option<PathBuf>,
+    socket_path: Option<PathBuf>,
 }
 
 impl Manager {
@@ -30,17 +36,36 @@ impl Manager {
     }
 
     pub fn with_store(idle_ms: u64, store: Store) -> Arc<Self> {
+        Self::with_paths(idle_ms, store, None, None)
+    }
+
+    pub fn with_paths(
+        idle_ms: u64,
+        store: Store,
+        accounts_dir: Option<PathBuf>,
+        socket_path: Option<PathBuf>,
+    ) -> Arc<Self> {
         let (events_tx, _) = broadcast::channel(EVENTS_BROADCAST_CAPACITY);
         Arc::new(Self {
             idle_ms,
             sessions: RwLock::new(HashMap::new()),
             events_tx,
             store,
+            accounts_dir,
+            socket_path,
         })
     }
 
     pub fn store(&self) -> &Store {
         &self.store
+    }
+
+    pub fn accounts_dir(&self) -> Option<&Path> {
+        self.accounts_dir.as_deref()
+    }
+
+    pub fn socket_path(&self) -> Option<&Path> {
+        self.socket_path.as_deref()
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<Notification> {
@@ -59,6 +84,31 @@ impl Manager {
                 .ok()
                 .flatten()
                 .map(|p| p.id);
+        }
+
+        params.account_id = params
+            .account_id
+            .take()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty());
+        if let Some(ref account_id) = params.account_id {
+            let account = self
+                .store
+                .get_account(account_id)
+                .map_err(store_error_to_rpc)?;
+            if let Some((key, val)) = accounts::env_for_account(&account) {
+                params.env.insert(key.to_string(), val);
+            }
+        }
+
+        if let Some(sock) = self
+            .socket_path
+            .clone()
+            .or_else(|| default_socket_path().ok())
+        {
+            params
+                .env
+                .insert("PAS_SOCKET".to_string(), sock.to_string_lossy().into_owned());
         }
 
         let base_title = params

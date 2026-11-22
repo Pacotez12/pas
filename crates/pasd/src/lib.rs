@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod claude;
 pub mod manager;
 pub mod remote;

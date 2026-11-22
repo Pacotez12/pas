@@ -117,6 +117,7 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
                         cols: 120,
                         rows: 40,
                         project_id: None,
+                        account_id: None,
                     },
                 )
                 .await?;

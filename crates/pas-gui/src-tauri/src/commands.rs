@@ -106,6 +106,7 @@ pub async fn create_session(
             cols: cols.unwrap_or(120),
             rows: rows.unwrap_or(40),
             project_id,
+            account_id: None,
         })
         .await
         .map_err(|e| e.to_string())

@@ -27,6 +27,10 @@ pub const METHOD_PROJECT_UNPIN: &str = "project.unpin";
 pub const METHOD_GROUP_LIST: &str = "group.list";
 pub const METHOD_GROUP_CREATE: &str = "group.create";
 pub const METHOD_GROUP_RENAME: &str = "group.rename";
+pub const METHOD_ACCOUNT_LIST: &str = "account.list";
+pub const METHOD_ACCOUNT_ADD: &str = "account.add";
+pub const METHOD_ACCOUNT_RENAME: &str = "account.rename";
+pub const METHOD_ACCOUNT_REMOVE: &str = "account.remove";
 pub const METHOD_CLAUDE_CONVERSATIONS: &str = "claude.conversations";
 
 pub const EVENT_SESSION_OUTPUT: &str = "session.output";
@@ -46,6 +50,9 @@ pub const ERR_NOT_A_GIT_REPO: i32 = 1007;
 pub const ERR_GROUP_NOT_FOUND: i32 = 1008;
 pub const ERR_GROUP_ALREADY_EXISTS: i32 = 1009;
 pub const ERR_SESSION_RUNNING: i32 = 1010;
+pub const ERR_ACCOUNT_NOT_FOUND: i32 = 1011;
+pub const ERR_ACCOUNT_ALREADY_EXISTS: i32 = 1012;
+pub const ERR_ACCOUNT_DIR_INVALID: i32 = 1013;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
@@ -128,6 +135,8 @@ pub struct SessionInfo {
     pub created_at: u64,
     #[serde(default)]
     pub project_id: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
 }
 
 fn default_cols() -> u16 {
@@ -156,6 +165,8 @@ pub struct CreateParams {
     pub rows: u16,
     #[serde(default)]
     pub project_id: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,4 +316,62 @@ pub struct ClaudeConversation {
     pub id: String,
     pub title: String,
     pub modified_at: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentKind {
+    Claude,
+    Codex,
+    Agy,
+}
+
+impl AgentKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Agy => "agy",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "claude" => Some(Self::Claude),
+            "codex" => Some(Self::Codex),
+            "agy" => Some(Self::Agy),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountInfo {
+    pub id: String,
+    pub agent: AgentKind,
+    pub name: String,
+    pub config_dir: PathBuf,
+    pub owned: bool,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountAddParams {
+    pub agent: AgentKind,
+    pub name: String,
+    #[serde(default)]
+    pub config_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountRenameParams {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountRemoveParams {
+    pub id: String,
+    #[serde(default)]
+    pub delete_dir: bool,
 }

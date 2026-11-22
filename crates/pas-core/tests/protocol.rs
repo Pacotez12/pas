@@ -187,6 +187,7 @@ fn stage2_types_roundtrip() {
         state: SessionState::Running,
         created_at: 123,
         project_id: Some("p1".into()),
+        account_id: None,
     };
     assert_eq!(
         serde_json::from_str::<SessionInfo>(&serde_json::to_string(&info).unwrap()).unwrap(),

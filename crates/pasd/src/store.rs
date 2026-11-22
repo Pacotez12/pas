@@ -2,12 +2,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pas_core::protocol::{GroupInfo, ProjectInfo};
+use pas_core::protocol::{AccountInfo, AgentKind, GroupInfo, ProjectInfo};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::remote::{read_origin_remote_key, repo_name_from_remote_key};
-
-const SCHEMA_VERSION: i32 = 1;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -29,6 +27,26 @@ pub enum StoreError {
     #[error("Ya existe un grupo llamado {name}. Elegí otro nombre.")]
     GroupAlreadyExists { name: String },
 
+    #[error("No se encontró esa cuenta. Revisá la lista de cuentas disponibles.")]
+    AccountNotFound,
+
+    #[error(
+        "Ya existe una cuenta que apunta a {}. Dos cuentas de pas no pueden compartir directorio; elegí otra carpeta.",
+        config_dir.display()
+    )]
+    AccountAlreadyExists { config_dir: PathBuf },
+
+    #[error(
+        "La carpeta {} no existe o no es un directorio. Creala o elegí una carpeta existente.",
+        path.display()
+    )]
+    AccountDirInvalid { path: PathBuf },
+
+    #[error(
+        "No hay una carpeta de datos configurada para crear cuentas nuevas. Indicá una carpeta existente o configurá --data-dir."
+    )]
+    NoAccountsDir,
+
     #[error("El nombre del {kind} no puede estar vacío. Escribí un nombre válido.")]
     EmptyName { kind: &'static str },
 
@@ -42,10 +60,15 @@ pub enum StoreError {
 #[derive(Debug)]
 pub struct Store {
     conn: Mutex<Connection>,
+    accounts_dir: Option<PathBuf>,
 }
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self, StoreError> {
+        let accounts_dir = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.join("accounts"));
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
@@ -55,6 +78,7 @@ impl Store {
         init_connection(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
+            accounts_dir,
         })
     }
 
@@ -63,7 +87,12 @@ impl Store {
         init_connection(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
+            accounts_dir: None,
         })
+    }
+
+    pub fn default_accounts_dir(&self) -> Option<&Path> {
+        self.accounts_dir.as_deref()
     }
 
     pub fn add_project(&self, path: &Path, name: Option<&str>) -> Result<ProjectInfo, StoreError> {
@@ -393,12 +422,152 @@ impl Store {
             remote_key: existing.remote_key,
         })
     }
+
+    pub fn generate_account_id(&self) -> Result<String, StoreError> {
+        let mut conn = self.conn.lock().expect("store lock poisoned");
+        let tx = conn.transaction()?;
+        unique_id(&tx, "accounts")
+    }
+
+    pub fn insert_account(
+        &self,
+        id: &str,
+        agent: AgentKind,
+        name: &str,
+        config_dir: &Path,
+        owned: bool,
+    ) -> Result<AccountInfo, StoreError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(StoreError::EmptyName { kind: "cuenta" });
+        }
+
+        let dir_str = config_dir.to_string_lossy().into_owned();
+        let created_at = now_unix_secs();
+
+        let mut conn = self.conn.lock().expect("store lock poisoned");
+        let tx = conn.transaction()?;
+
+        let exists: Option<String> = tx
+            .query_row(
+                "SELECT id FROM accounts WHERE config_dir = ?1",
+                params![&dir_str],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if exists.is_some() {
+            return Err(StoreError::AccountAlreadyExists {
+                config_dir: config_dir.to_path_buf(),
+            });
+        }
+
+        tx.execute(
+            "INSERT INTO accounts (id, agent, name, config_dir, owned, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                id,
+                agent.as_str(),
+                name,
+                &dir_str,
+                if owned { 1i64 } else { 0i64 },
+                created_at
+            ],
+        )?;
+        tx.commit()?;
+
+        Ok(AccountInfo {
+            id: id.to_string(),
+            agent,
+            name: name.to_string(),
+            config_dir: config_dir.to_path_buf(),
+            owned,
+            created_at: created_at.max(0) as u64,
+        })
+    }
+
+    pub fn list_accounts(&self) -> Result<Vec<AccountInfo>, StoreError> {
+        let conn = self.conn.lock().expect("store lock poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id, agent, name, config_dir, owned, created_at
+             FROM accounts
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], map_account_row)?;
+        let mut accounts = Vec::new();
+        for row in rows {
+            accounts.push(row?);
+        }
+        Ok(accounts)
+    }
+
+    pub fn get_account(&self, id: &str) -> Result<AccountInfo, StoreError> {
+        let conn = self.conn.lock().expect("store lock poisoned");
+        conn.query_row(
+            "SELECT id, agent, name, config_dir, owned, created_at
+             FROM accounts
+             WHERE id = ?1",
+            params![id],
+            map_account_row,
+        )
+        .optional()?
+        .ok_or(StoreError::AccountNotFound)
+    }
+
+    pub fn rename_account(&self, id: &str, name: &str) -> Result<AccountInfo, StoreError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(StoreError::EmptyName { kind: "cuenta" });
+        }
+
+        let mut conn = self.conn.lock().expect("store lock poisoned");
+        let tx = conn.transaction()?;
+
+        let updated = tx.execute(
+            "UPDATE accounts SET name = ?1 WHERE id = ?2",
+            params![name, id],
+        )?;
+        if updated == 0 {
+            return Err(StoreError::AccountNotFound);
+        }
+
+        let account = tx.query_row(
+            "SELECT id, agent, name, config_dir, owned, created_at
+             FROM accounts
+             WHERE id = ?1",
+            params![id],
+            map_account_row,
+        )?;
+        tx.commit()?;
+        Ok(account)
+    }
+
+    pub fn delete_account(&self, id: &str) -> Result<AccountInfo, StoreError> {
+        let mut conn = self.conn.lock().expect("store lock poisoned");
+        let tx = conn.transaction()?;
+
+        let existing: Option<AccountInfo> = tx
+            .query_row(
+                "SELECT id, agent, name, config_dir, owned, created_at
+                 FROM accounts
+                 WHERE id = ?1",
+                params![id],
+                map_account_row,
+            )
+            .optional()?;
+        let Some(existing) = existing else {
+            return Err(StoreError::AccountNotFound);
+        };
+
+        tx.execute("DELETE FROM accounts WHERE id = ?1", params![id])?;
+        tx.commit()?;
+        Ok(existing)
+    }
 }
 
 fn init_connection(conn: &Connection) -> Result<(), StoreError> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
     let version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version < SCHEMA_VERSION {
+    if version < 1 {
         conn.execute_batch(
             "BEGIN;
              CREATE TABLE IF NOT EXISTS groups (
@@ -418,7 +587,44 @@ fn init_connection(conn: &Connection) -> Result<(), StoreError> {
              COMMIT;",
         )?;
     }
+    if version < 2 {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE IF NOT EXISTS accounts (
+                 id TEXT PRIMARY KEY,
+                 agent TEXT NOT NULL CHECK(agent IN ('claude', 'codex', 'agy')),
+                 name TEXT NOT NULL,
+                 config_dir TEXT NOT NULL UNIQUE,
+                 owned INTEGER NOT NULL DEFAULT 0,
+                 created_at INTEGER NOT NULL
+             );
+             PRAGMA user_version = 2;
+             COMMIT;",
+        )?;
+    }
     Ok(())
+}
+
+fn map_account_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AccountInfo> {
+    let agent_str: String = row.get(1)?;
+    let agent = AgentKind::parse(&agent_str).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            1,
+            rusqlite::types::Type::Text,
+            format!("agente inválido en accounts: {agent_str}").into(),
+        )
+    })?;
+    let config_dir: String = row.get(3)?;
+    let owned: i64 = row.get(4)?;
+    let created_at: i64 = row.get(5)?;
+    Ok(AccountInfo {
+        id: row.get(0)?,
+        agent,
+        name: row.get(2)?,
+        config_dir: PathBuf::from(config_dir),
+        owned: owned != 0,
+        created_at: created_at.max(0) as u64,
+    })
 }
 
 fn map_project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectInfo> {
@@ -520,6 +726,7 @@ fn unique_id(tx: &Transaction<'_>, table: &str) -> Result<String, StoreError> {
     let sql = match table {
         "groups" => "SELECT 1 FROM groups WHERE id = ?1",
         "projects" => "SELECT 1 FROM projects WHERE id = ?1",
+        "accounts" => "SELECT 1 FROM accounts WHERE id = ?1",
         _ => unreachable!("tabla desconocida: {table}"),
     };
     let mut bytes = [0u8; 4];

@@ -80,7 +80,12 @@ async fn main() -> ExitCode {
     };
 
     tracing::info!("pasd escuchando en {}", path.display());
-    let mgr = Manager::with_store(args.idle_ms, store);
+    let mgr = Manager::with_paths(
+        args.idle_ms,
+        store,
+        Some(data_dir.join("accounts")),
+        Some(path.clone()),
+    );
 
     tokio::select! {
         _ = server::serve(listener, Arc::clone(&mgr)) => {}

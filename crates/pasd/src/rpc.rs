@@ -3,21 +3,24 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use pas_core::protocol::{
-    ClaudeConversationsParams, CreateParams, CreateResult, ERR_GROUP_ALREADY_EXISTS,
-    ERR_GROUP_NOT_FOUND, ERR_INVALID_PARAMS, ERR_METHOD_NOT_FOUND, ERR_NOT_A_GIT_REPO,
-    ERR_PROJECT_ALREADY_EXISTS, ERR_PROJECT_NOT_FOUND, GroupCreateParams, GroupRenameParams,
-    IdParams, InputParams, METHOD_CLAUDE_CONVERSATIONS, METHOD_DAEMON_PING, METHOD_GROUP_CREATE,
-    METHOD_GROUP_LIST, METHOD_GROUP_RENAME, METHOD_PROJECT_ADD, METHOD_PROJECT_LIST,
-    METHOD_PROJECT_MOVE, METHOD_PROJECT_REMOVE, METHOD_PROJECT_RENAME, METHOD_PROJECT_UNPIN,
-    METHOD_SESSION_CREATE, METHOD_SESSION_INPUT, METHOD_SESSION_KILL, METHOD_SESSION_LIST,
-    METHOD_SESSION_READ, METHOD_SESSION_REMOVE, METHOD_SESSION_RESIZE, METHOD_SESSION_SEND,
-    METHOD_SESSION_SNAPSHOT, METHOD_SESSION_WAIT, PingResult, ProjectAddParams, ProjectMoveParams,
-    ProjectRenameParams, ReadParams, ReadResult, Request, ResizeParams, Response, RpcError,
-    SendParams, SnapshotResult, WaitParams,
+    AccountAddParams, AccountRemoveParams, AccountRenameParams, ClaudeConversationsParams,
+    CreateParams, CreateResult, ERR_ACCOUNT_ALREADY_EXISTS, ERR_ACCOUNT_DIR_INVALID,
+    ERR_ACCOUNT_NOT_FOUND, ERR_GROUP_ALREADY_EXISTS, ERR_GROUP_NOT_FOUND, ERR_INVALID_PARAMS,
+    ERR_METHOD_NOT_FOUND, ERR_NOT_A_GIT_REPO, ERR_PROJECT_ALREADY_EXISTS, ERR_PROJECT_NOT_FOUND,
+    GroupCreateParams, GroupRenameParams, IdParams, InputParams, METHOD_ACCOUNT_ADD,
+    METHOD_ACCOUNT_LIST, METHOD_ACCOUNT_REMOVE, METHOD_ACCOUNT_RENAME, METHOD_CLAUDE_CONVERSATIONS,
+    METHOD_DAEMON_PING, METHOD_GROUP_CREATE, METHOD_GROUP_LIST, METHOD_GROUP_RENAME,
+    METHOD_PROJECT_ADD, METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE, METHOD_PROJECT_REMOVE,
+    METHOD_PROJECT_RENAME, METHOD_PROJECT_UNPIN, METHOD_SESSION_CREATE, METHOD_SESSION_INPUT,
+    METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_REMOVE,
+    METHOD_SESSION_RESIZE, METHOD_SESSION_SEND, METHOD_SESSION_SNAPSHOT, METHOD_SESSION_WAIT,
+    PingResult, ProjectAddParams, ProjectMoveParams, ProjectRenameParams, ReadParams, ReadResult,
+    Request, ResizeParams, Response, RpcError, SendParams, SnapshotResult, WaitParams,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use crate::accounts;
 use crate::claude;
 use crate::manager::{Manager, session_error_to_rpc};
 use crate::store::StoreError;
@@ -171,6 +174,28 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
                 .map_err(store_error_to_rpc)?;
             ok_json(group)
         }
+        METHOD_ACCOUNT_LIST => {
+            let accounts = accounts::list_accounts(mgr.store()).map_err(store_error_to_rpc)?;
+            ok_json(accounts)
+        }
+        METHOD_ACCOUNT_ADD => {
+            let params: AccountAddParams = parse_params(req.params)?;
+            let account = accounts::add_account(mgr.store(), mgr.accounts_dir(), params)
+                .map_err(store_error_to_rpc)?;
+            ok_json(account)
+        }
+        METHOD_ACCOUNT_RENAME => {
+            let params: AccountRenameParams = parse_params(req.params)?;
+            let account = accounts::rename_account(mgr.store(), &params.id, &params.name)
+                .map_err(store_error_to_rpc)?;
+            ok_json(account)
+        }
+        METHOD_ACCOUNT_REMOVE => {
+            let params: AccountRemoveParams = parse_params(req.params)?;
+            accounts::remove_account(mgr.store(), &params.id, params.delete_dir)
+                .map_err(store_error_to_rpc)?;
+            Ok(json!({}))
+        }
         other => Err(RpcError {
             code: ERR_METHOD_NOT_FOUND,
             message: format!("Método desconocido: {other}."),
@@ -178,14 +203,17 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
     }
 }
 
-fn store_error_to_rpc(err: StoreError) -> RpcError {
+pub(crate) fn store_error_to_rpc(err: StoreError) -> RpcError {
     let code = match err {
         StoreError::NotAGitRepo { .. } => ERR_NOT_A_GIT_REPO,
         StoreError::ProjectAlreadyExists { .. } => ERR_PROJECT_ALREADY_EXISTS,
         StoreError::ProjectNotFound { .. } => ERR_PROJECT_NOT_FOUND,
         StoreError::GroupNotFound { .. } => ERR_GROUP_NOT_FOUND,
         StoreError::GroupAlreadyExists { .. } => ERR_GROUP_ALREADY_EXISTS,
-        StoreError::EmptyName { .. } => ERR_INVALID_PARAMS,
+        StoreError::AccountNotFound => ERR_ACCOUNT_NOT_FOUND,
+        StoreError::AccountAlreadyExists { .. } => ERR_ACCOUNT_ALREADY_EXISTS,
+        StoreError::AccountDirInvalid { .. } => ERR_ACCOUNT_DIR_INVALID,
+        StoreError::NoAccountsDir | StoreError::EmptyName { .. } => ERR_INVALID_PARAMS,
         StoreError::Sqlite(_) | StoreError::Io(_) => -32603,
     };
     RpcError {

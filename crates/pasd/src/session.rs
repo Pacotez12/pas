@@ -44,6 +44,7 @@ pub struct Session {
     command: Vec<String>,
     created_at: u64,
     project_id: Option<String>,
+    account_id: Option<String>,
     parser: Arc<Mutex<vt100::Parser>>,
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -100,6 +101,7 @@ impl Session {
         for (k, v) in &p.env {
             cmd.env(k, v);
         }
+        cmd.env("PAS_SESSION_ID", &id);
 
         let mut child = pair
             .slave
@@ -228,6 +230,7 @@ impl Session {
             command: p.command,
             created_at,
             project_id: p.project_id,
+            account_id: p.account_id,
             parser,
             writer: Mutex::new(writer),
             master: Mutex::new(pair.master),
@@ -417,6 +420,7 @@ impl Session {
             state: self.state(),
             created_at: self.created_at,
             project_id: self.project_id.clone(),
+            account_id: self.account_id.clone(),
         }
     }
 

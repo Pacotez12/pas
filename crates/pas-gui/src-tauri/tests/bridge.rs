@@ -94,6 +94,7 @@ async fn bridge_forwards_output_events() {
             cols: 80,
             rows: 24,
             project_id: None,
+            account_id: None,
         })
         .await
         .unwrap();
