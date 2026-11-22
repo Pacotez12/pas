@@ -110,4 +110,6 @@ pas está en desarrollo activo y por ahora solo funciona en Linux. La interfaz e
 
 ## Licencia
 
-El código se publica bajo MIT o Apache-2.0, a tu elección. Los archivos de licencia se suman en breve. El logo y el personaje no entran en esa licencia: son de su autor y no se pueden reutilizar sin permiso.
+El código se publica bajo [MIT](LICENSE-MIT) o [Apache-2.0](LICENSE-APACHE), a tu elección.
+
+El logo, el personaje y los íconos de la app no entran en esa licencia: ver [LICENSE-ASSETS](LICENSE-ASSETS). Si hacés un fork y lo distribuís, reemplazalos por los tuyos.

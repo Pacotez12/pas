@@ -1,0 +1,19 @@
+pas brand assets
+
+Copyright (c) 2026 Marco Brizuela. All rights reserved.
+
+The pas logo, the character it depicts, the "pas" logo lockup and the app
+icons are NOT covered by the MIT or Apache-2.0 licenses that apply to the
+source code. This includes, without limitation:
+
+  - docs/brand/
+  - crates/pas-gui/src-tauri/icons/
+  - crates/pas-gui/src/assets/
+
+You may show these assets unmodified to refer to the pas project (for example
+in articles, reviews or links to this repository). Any other use, including
+modifying them, using them in other projects or products, or using the
+character on its own, requires prior written permission from the copyright
+holder.
+
+If you fork pas, replace these assets with your own before distributing it.
