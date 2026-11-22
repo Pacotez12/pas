@@ -106,6 +106,7 @@ impl Session {
     pub fn spawn_chat(
         id: String,
         p: CreateParams,
+        agent: Option<AgentKind>,
         chats_dir: Option<&Path>,
         events_tx: broadcast::Sender<Notification>,
     ) -> Result<Arc<Self>, SessionError> {
@@ -120,6 +121,7 @@ impl Session {
         let chat = ChatSession::spawn(
             id.clone(),
             title.clone(),
+            agent,
             &p,
             chats_dir,
             state_tx.clone(),
@@ -550,6 +552,10 @@ impl Session {
 
     pub fn chat_history(&self) -> Result<Vec<ChatEvent>, SessionError> {
         Ok(self.as_chat()?.history())
+    }
+
+    pub fn chat_terminal_command(&self) -> Result<Option<Vec<String>>, SessionError> {
+        Ok(self.as_chat()?.terminal_command())
     }
 
     pub fn state(&self) -> SessionState {

@@ -41,6 +41,9 @@ pub const METHOD_CHAT_PROMPT: &str = "chat.prompt";
 pub const METHOD_CHAT_PERMISSION: &str = "chat.permission";
 pub const METHOD_CHAT_CANCEL: &str = "chat.cancel";
 pub const METHOD_CHAT_HISTORY: &str = "chat.history";
+pub const METHOD_CHAT_TERMINAL_COMMAND: &str = "chat.terminal_command";
+pub const METHOD_ACP_STATUS: &str = "acp.status";
+pub const METHOD_ACP_INSTALL: &str = "acp.install";
 
 pub const EVENT_SESSION_OUTPUT: &str = "session.output";
 pub const EVENT_SESSION_STATE: &str = "session.state";
@@ -70,6 +73,8 @@ pub const ERR_HOOKS_CONFIG_INVALID: i32 = 1014;
 pub const ERR_WRONG_SESSION_MODE: i32 = 1015;
 pub const ERR_PERMISSION_NOT_FOUND: i32 = 1016;
 pub const ERR_CHAT_BUSY: i32 = 1017;
+pub const ERR_ADAPTER_NOT_FOUND: i32 = 1018;
+pub const ERR_ADAPTER_INSTALL_FAILED: i32 = 1019;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
@@ -538,4 +543,20 @@ pub enum ChatEvent {
 pub struct ChatEventNotification {
     pub id: String,
     pub event: ChatEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcpAdapterStatus {
+    pub agent: AgentKind,
+    pub bin: String,
+    pub installed: bool,
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    #[serde(default)]
+    pub package: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcpInstallParams {
+    pub agent: AgentKind,
 }

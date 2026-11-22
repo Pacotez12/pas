@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use pas_core::protocol::{
-    AccountInfo, AccountQuota, AgentKind, ClaudeConversation, CreateParams, CreateResult,
-    GroupInfo, ProjectInfo, SessionInfo, SnapshotResult,
+    AccountInfo, AccountQuota, AcpAdapterStatus, AgentKind, ClaudeConversation, CreateParams,
+    CreateResult, GroupInfo, ProjectInfo, SessionInfo, SnapshotResult,
 };
 use tauri::State;
 
@@ -208,6 +208,30 @@ pub async fn uninstall_account_hooks(
 #[tauri::command]
 pub async fn list_quotas(bridge: State<'_, Bridge>) -> Result<Vec<AccountQuota>, String> {
     bridge.list_quotas().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn acp_status(bridge: State<'_, Bridge>) -> Result<Vec<AcpAdapterStatus>, String> {
+    bridge.acp_status().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn acp_install(
+    bridge: State<'_, Bridge>,
+    agent: AgentKind,
+) -> Result<AcpAdapterStatus, String> {
+    bridge.acp_install(agent).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn chat_terminal_command(
+    bridge: State<'_, Bridge>,
+    id: String,
+) -> Result<Option<Vec<String>>, String> {
+    bridge
+        .chat_terminal_command(id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

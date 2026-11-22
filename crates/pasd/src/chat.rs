@@ -101,6 +101,8 @@ impl EventSink {
 
 pub struct ChatSession {
     title: String,
+    agent: Option<AgentKind>,
+    acp_session_id: Arc<Mutex<Option<String>>>,
     state_tx: watch::Sender<SessionState>,
     cmd_tx: mpsc::UnboundedSender<ChatCommand>,
     history: Arc<Mutex<Vec<ChatEvent>>>,
@@ -113,6 +115,7 @@ impl ChatSession {
     pub fn spawn(
         id: String,
         title: String,
+        agent: Option<AgentKind>,
         p: &CreateParams,
         chats_dir: Option<&Path>,
         state_tx: watch::Sender<SessionState>,
@@ -211,12 +214,14 @@ impl ChatSession {
         let allowed_tools: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
         let in_flight = Arc::new(AtomicBool::new(false));
         let killed_by_user = Arc::new(AtomicBool::new(false));
+        let acp_session_id_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
         let driver_state_tx = state_tx.clone();
         let driver_pending = Arc::clone(&pending_permissions);
         let driver_allowed = Arc::clone(&allowed_tools);
         let driver_in_flight = Arc::clone(&in_flight);
         let driver_killed = Arc::clone(&killed_by_user);
+        let driver_acp_session_id = Arc::clone(&acp_session_id_slot);
         let cwd = p.cwd.clone();
 
         tokio::spawn(async move {
@@ -368,6 +373,9 @@ impl ChatSession {
                         .block_task()
                         .await?;
                     let acp_session_id = session.session_id;
+                    if let Ok(mut slot) = driver_acp_session_id.lock() {
+                        *slot = Some(acp_session_id.0.to_string());
+                    }
 
                     set_state_if_alive(&fg_state_tx, SessionState::Idle);
 
@@ -501,6 +509,8 @@ impl ChatSession {
 
         Ok(Self {
             title,
+            agent,
+            acp_session_id: acp_session_id_slot,
             state_tx,
             cmd_tx,
             history,
@@ -570,6 +580,19 @@ impl ChatSession {
 
     pub fn history(&self) -> Vec<ChatEvent> {
         self.history.lock().map(|h| h.clone()).unwrap_or_default()
+    }
+
+    pub fn terminal_command(&self) -> Option<Vec<String>> {
+        match self.agent {
+            Some(AgentKind::Claude) => {
+                let sid = self.acp_session_id.lock().ok()?.clone()?;
+                if sid.is_empty() {
+                    return None;
+                }
+                Some(vec!["claude".into(), "--resume".into(), sid])
+            }
+            Some(AgentKind::Codex) | Some(AgentKind::Agy) | None => None,
+        }
     }
 
     pub fn last_visible_line(&self) -> Option<String> {
@@ -772,7 +795,7 @@ fn pick_permission_outcome(
     RequestPermissionOutcome::Cancelled
 }
 
-fn summarize_stderr(raw: &str) -> String {
+pub(crate) fn summarize_stderr(raw: &str) -> String {
     let lines: Vec<&str> = raw
         .lines()
         .map(str::trim)

@@ -738,3 +738,343 @@ async fn wrong_mode_returns_voseo_error_and_adapter_command_resolves() {
 
     dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;
 }
+
+#[tokio::test]
+async fn status_reports_missing_adapter() {
+    use pasd::acp::AcpEnv;
+    use std::ffi::OsString;
+
+    let dir = tempdir().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    let mgr = Manager::with_acp_env(
+        200,
+        store,
+        Some(dir.path().join("accounts")),
+        None,
+        Config::default(),
+        Arc::new(FakeNotifier::default()),
+        AcpEnv {
+            data_dir: Some(dir.path().to_path_buf()),
+            path_env: Some(OsString::new()),
+            npm_bin: None,
+        },
+    );
+
+    let res = dispatch(&mgr, req("acp.status", json!({}))).await;
+    assert!(res.error.is_none(), "error en acp.status: {:?}", res.error);
+    let statuses: Vec<Value> = serde_json::from_value(res.result.unwrap()).unwrap();
+    assert_eq!(statuses.len(), 3);
+
+    let claude = statuses
+        .iter()
+        .find(|s| s["agent"] == "claude")
+        .expect("falta claude en acp.status");
+    assert_eq!(claude["bin"], "claude-agent-acp");
+    assert_eq!(claude["installed"], false);
+    assert!(claude["path"].is_null());
+    assert_eq!(claude["package"], "@agentclientprotocol/claude-agent-acp");
+
+    let codex = statuses
+        .iter()
+        .find(|s| s["agent"] == "codex")
+        .expect("falta codex en acp.status");
+    assert_eq!(codex["bin"], "codex-acp");
+    assert_eq!(codex["installed"], false);
+    assert!(codex["path"].is_null());
+    assert_eq!(codex["package"], "@agentclientprotocol/codex-acp");
+
+    let agy = statuses
+        .iter()
+        .find(|s| s["agent"] == "agy")
+        .expect("falta agy en acp.status");
+    assert_eq!(agy["bin"], "agy");
+    assert_eq!(agy["installed"], false);
+    assert!(agy["path"].is_null());
+    assert!(agy["package"].is_null());
+
+    // Al crear el binario en <data_dir>/acp/node_modules/.bin/codex-acp, debe detectarlo.
+    let bin_dir = dir.path().join("acp").join("node_modules").join(".bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let fake_codex = bin_dir.join("codex-acp");
+    std::fs::write(&fake_codex, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake_codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let res2 = dispatch(&mgr, req("acp.status", json!({}))).await;
+    assert!(res2.error.is_none(), "{:?}", res2.error);
+    let statuses2: Vec<Value> = serde_json::from_value(res2.result.unwrap()).unwrap();
+    let codex2 = statuses2.iter().find(|s| s["agent"] == "codex").unwrap();
+    assert_eq!(codex2["installed"], true);
+    assert_eq!(codex2["path"], fake_codex.to_string_lossy().as_ref());
+}
+
+#[tokio::test]
+async fn install_uses_npm_prefix() {
+    use pasd::acp::AcpEnv;
+    use std::ffi::OsString;
+
+    let dir = tempdir().unwrap();
+    let log_file = dir.path().join("npm-args.txt");
+    let fake_npm = dir.path().join("fake-npm");
+    let expected_prefix = dir.path().join("acp");
+
+    // Script falso de npm que registra los argumentos y crea el binario en node_modules/.bin.
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"{}\"\nmkdir -p \"{}/node_modules/.bin\"\nprintf '#!/bin/sh\\nexit 0\\n' > \"{}/node_modules/.bin/codex-acp\"\nchmod +x \"{}/node_modules/.bin/codex-acp\"\n",
+        log_file.display(),
+        expected_prefix.display(),
+        expected_prefix.display(),
+        expected_prefix.display(),
+    );
+    std::fs::write(&fake_npm, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake_npm, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let store = Store::open_in_memory().unwrap();
+    let mgr = Manager::with_acp_env(
+        200,
+        store,
+        Some(dir.path().join("accounts")),
+        None,
+        Config::default(),
+        Arc::new(FakeNotifier::default()),
+        AcpEnv {
+            data_dir: Some(dir.path().to_path_buf()),
+            path_env: Some(OsString::new()),
+            npm_bin: Some(fake_npm.into_os_string()),
+        },
+    );
+
+    // agy debe rechazar con "agy ya trae su adaptador".
+    let agy_err = dispatch(&mgr, req("acp.install", json!({ "agent": "agy" })))
+        .await
+        .error
+        .expect("acp.install para agy debe devolver error");
+    assert!(
+        agy_err.message.contains("agy ya trae su adaptador"),
+        "mensaje inesperado para agy: {}",
+        agy_err.message
+    );
+
+    let res = dispatch(&mgr, req("acp.install", json!({ "agent": "codex" }))).await;
+    assert!(res.error.is_none(), "error en acp.install: {:?}", res.error);
+    let status: Value = res.result.unwrap();
+    assert_eq!(status["agent"], "codex");
+    assert_eq!(status["installed"], true);
+
+    let recorded = std::fs::read_to_string(&log_file).unwrap();
+    let args: Vec<&str> = recorded.lines().collect();
+    assert_eq!(
+        args,
+        vec![
+            "install",
+            "--prefix",
+            expected_prefix.to_string_lossy().as_ref(),
+            "@agentclientprotocol/codex-acp",
+        ]
+    );
+
+    // Si npm falla, debe devolver error claro con stderr resumido y qué hacer.
+    let failing_npm = dir.path().join("failing-npm");
+    std::fs::write(
+        &failing_npm,
+        "#!/bin/sh\necho 'EAI_AGAIN registry.npmjs.org' >&2\nexit 1\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&failing_npm, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mgr_fail = Manager::with_acp_env(
+        200,
+        Store::open_in_memory().unwrap(),
+        Some(dir.path().join("accounts")),
+        None,
+        Config::default(),
+        Arc::new(FakeNotifier::default()),
+        AcpEnv {
+            data_dir: Some(dir.path().to_path_buf()),
+            path_env: Some(OsString::new()),
+            npm_bin: Some(failing_npm.into_os_string()),
+        },
+    );
+    let fail_err = dispatch(&mgr_fail, req("acp.install", json!({ "agent": "claude" })))
+        .await
+        .error
+        .expect("acp.install debe fallar si npm devuelve error");
+    assert!(
+        fail_err.message.contains("EAI_AGAIN registry.npmjs.org"),
+        "faltó stderr resumido: {}",
+        fail_err.message
+    );
+    assert!(
+        fail_err.message.contains("npm install --prefix"),
+        "faltó sugerencia de qué hacer: {}",
+        fail_err.message
+    );
+}
+
+#[tokio::test]
+async fn terminal_command_for_claude_uses_resume() {
+    use pasd::acp::AcpEnv;
+    use std::ffi::OsString;
+
+    let dir = tempdir().unwrap();
+    let bin_dir = dir.path().join("acp").join("node_modules").join(".bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+
+    // Adaptadores falsos para claude y codex apuntando a fake-acp-agent.
+    let fake_bin = fake_acp_agent_bin();
+    for name in ["claude-agent-acp", "codex-acp"] {
+        let target = bin_dir.join(name);
+        std::fs::write(&target, format!("#!/bin/sh\nexec \"{fake_bin}\" \"$@\"\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    let store = Store::open_in_memory().unwrap();
+    let mgr = Manager::with_acp_env(
+        200,
+        store,
+        Some(dir.path().join("accounts")),
+        None,
+        Config::default(),
+        Arc::new(FakeNotifier::default()),
+        AcpEnv {
+            data_dir: Some(dir.path().to_path_buf()),
+            path_env: Some(OsString::new()),
+            npm_bin: None,
+        },
+    );
+
+    let claude_created: CreateResult = serde_json::from_value(
+        dispatch(
+            &mgr,
+            req(
+                METHOD_SESSION_CREATE,
+                json!({
+                    "mode": "chat",
+                    "command": ["claude"],
+                    "cwd": dir.path(),
+                    "title": "claude-chat",
+                }),
+            ),
+        )
+        .await
+        .result
+        .unwrap(),
+    )
+    .unwrap();
+    wait_for_state(&mgr, &claude_created.id, SessionState::Idle).await;
+
+    let cmd_res = dispatch(
+        &mgr,
+        req("chat.terminal_command", json!({ "id": claude_created.id })),
+    )
+    .await;
+    assert!(
+        cmd_res.error.is_none(),
+        "error en chat.terminal_command: {:?}",
+        cmd_res.error
+    );
+    let cmd: Option<Vec<String>> = serde_json::from_value(cmd_res.result.unwrap()).unwrap();
+    let cmd = cmd.expect("Claude debe devolver comando para abrir en terminal");
+    assert_eq!(cmd.len(), 3);
+    assert_eq!(cmd[0], "claude");
+    assert_eq!(cmd[1], "--resume");
+    assert_eq!(cmd[2], "fake-session-1");
+
+    let codex_created: CreateResult = serde_json::from_value(
+        dispatch(
+            &mgr,
+            req(
+                METHOD_SESSION_CREATE,
+                json!({
+                    "mode": "chat",
+                    "command": ["codex"],
+                    "cwd": dir.path(),
+                    "title": "codex-chat",
+                }),
+            ),
+        )
+        .await
+        .result
+        .unwrap(),
+    )
+    .unwrap();
+    wait_for_state(&mgr, &codex_created.id, SessionState::Idle).await;
+
+    let codex_cmd_res = dispatch(
+        &mgr,
+        req("chat.terminal_command", json!({ "id": codex_created.id })),
+    )
+    .await;
+    assert!(codex_cmd_res.error.is_none(), "{:?}", codex_cmd_res.error);
+    let codex_cmd: Option<Vec<String>> =
+        serde_json::from_value(codex_cmd_res.result.unwrap()).unwrap();
+    assert_eq!(codex_cmd, None);
+
+    dispatch(
+        &mgr,
+        req(METHOD_SESSION_KILL, json!({ "id": claude_created.id })),
+    )
+    .await;
+    dispatch(
+        &mgr,
+        req(METHOD_SESSION_KILL, json!({ "id": codex_created.id })),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn chat_create_without_adapter_gives_clear_error() {
+    use pasd::acp::AcpEnv;
+    use std::ffi::OsString;
+
+    let dir = tempdir().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    let mgr = Manager::with_acp_env(
+        200,
+        store,
+        Some(dir.path().join("accounts")),
+        None,
+        Config::default(),
+        Arc::new(FakeNotifier::default()),
+        AcpEnv {
+            data_dir: Some(dir.path().to_path_buf()),
+            path_env: Some(OsString::new()),
+            npm_bin: None,
+        },
+    );
+
+    let res = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_CREATE,
+            json!({
+                "mode": "chat",
+                "command": ["codex"],
+                "cwd": dir.path(),
+                "title": "codex-missing",
+            }),
+        ),
+    )
+    .await;
+    let err = res
+        .error
+        .expect("session.create en modo chat sin adaptador debe fallar");
+    assert_eq!(
+        err.message,
+        "El chat de Codex necesita el adaptador codex-acp. Instalalo desde Cuentas o abrí la sesión en modo Terminal."
+    );
+}

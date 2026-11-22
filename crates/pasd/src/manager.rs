@@ -5,12 +5,13 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use pas_core::protocol::{
-    AccountQuota, AgentKind, CreateParams, ERR_CHAT_BUSY, ERR_INVALID_PARAMS,
-    ERR_PERMISSION_NOT_FOUND, ERR_SESSION_EXITED, ERR_SESSION_NOT_FOUND, ERR_SESSION_RUNNING,
-    ERR_SPAWN_FAILED, ERR_WAIT_TIMEOUT, ERR_WRONG_SESSION_MODE, EVENT_QUOTA_CHANGED,
-    EVENT_QUOTA_WARNING, EVENT_SESSION_CREATED, EVENT_SESSION_FOCUS_REQUEST, EVENT_SESSION_REMOVED,
-    EVENT_SESSION_STATE, Mode, Notification, QuotaReportParams, RpcError, SessionCreatedEvent,
-    SessionFocusRequestEvent, SessionInfo, SessionRemovedEvent, SessionState, SessionStateEvent,
+    AccountQuota, AcpAdapterStatus, AgentKind, CreateParams, ERR_ADAPTER_INSTALL_FAILED,
+    ERR_ADAPTER_NOT_FOUND, ERR_CHAT_BUSY, ERR_INVALID_PARAMS, ERR_PERMISSION_NOT_FOUND,
+    ERR_SESSION_EXITED, ERR_SESSION_NOT_FOUND, ERR_SESSION_RUNNING, ERR_SPAWN_FAILED,
+    ERR_WAIT_TIMEOUT, ERR_WRONG_SESSION_MODE, EVENT_QUOTA_CHANGED, EVENT_QUOTA_WARNING,
+    EVENT_SESSION_CREATED, EVENT_SESSION_FOCUS_REQUEST, EVENT_SESSION_REMOVED, EVENT_SESSION_STATE,
+    Mode, Notification, QuotaReportParams, RpcError, SessionCreatedEvent, SessionFocusRequestEvent,
+    SessionInfo, SessionRemovedEvent, SessionState, SessionStateEvent,
 };
 use pas_core::socket::socket_path as default_socket_path;
 use serde_json::json;
@@ -18,7 +19,7 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 use crate::accounts;
-use crate::chat;
+use crate::acp::{self, AcpEnv, AcpError};
 use crate::config::Config;
 use crate::notify::{NoopNotifier, Notifier, WaitingNotice};
 use crate::quota::{self, QuotaTracker, QuotaUpdate};
@@ -35,6 +36,7 @@ pub struct Manager {
     store: Store,
     accounts_dir: Option<PathBuf>,
     socket_path: Option<PathBuf>,
+    acp_env: AcpEnv,
     quotas: QuotaTracker,
     config: Config,
     notifier: Arc<dyn Notifier>,
@@ -84,6 +86,35 @@ impl Manager {
         config: Config,
         notifier: Arc<dyn Notifier>,
     ) -> Arc<Self> {
+        let data_dir = accounts_dir
+            .as_deref()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf);
+        let acp_env = AcpEnv {
+            data_dir,
+            path_env: None,
+            npm_bin: None,
+        };
+        Self::with_acp_env(
+            idle_ms,
+            store,
+            accounts_dir,
+            socket_path,
+            config,
+            notifier,
+            acp_env,
+        )
+    }
+
+    pub fn with_acp_env(
+        idle_ms: u64,
+        store: Store,
+        accounts_dir: Option<PathBuf>,
+        socket_path: Option<PathBuf>,
+        config: Config,
+        notifier: Arc<dyn Notifier>,
+        acp_env: AcpEnv,
+    ) -> Arc<Self> {
         let (events_tx, _) = broadcast::channel(EVENTS_BROADCAST_CAPACITY);
         let quotas = QuotaTracker::default();
         quotas.set_warn_percent(config.quota_warn_percent);
@@ -94,10 +125,21 @@ impl Manager {
             store,
             accounts_dir,
             socket_path,
+            acp_env,
             quotas,
             config,
             notifier,
         })
+    }
+
+    pub fn acp_status(&self) -> Vec<AcpAdapterStatus> {
+        acp::status(&self.acp_env)
+    }
+
+    pub async fn acp_install(&self, agent: AgentKind) -> Result<AcpAdapterStatus, RpcError> {
+        acp::install(agent, &self.acp_env)
+            .await
+            .map_err(acp_error_to_rpc)
     }
 
     pub fn set_quota_warn_percent(&self, percent: f32) {
@@ -267,7 +309,11 @@ impl Manager {
         }
 
         if params.mode == Mode::Chat {
-            params.command = chat::resolve_adapter_command(&params.command, agent_kind);
+            let (resolved_cmd, resolved_agent) =
+                acp::resolve_adapter_command(&params.command, agent_kind, &self.acp_env)
+                    .map_err(acp_error_to_rpc)?;
+            params.command = resolved_cmd;
+            agent_kind = resolved_agent;
         }
 
         let base_title = params
@@ -291,13 +337,20 @@ impl Manager {
             ),
             Mode::Chat => {
                 let chats_dir = self
-                    .accounts_dir
+                    .acp_env
+                    .data_dir
                     .as_deref()
-                    .and_then(Path::parent)
-                    .map(|p| p.join("chats"));
+                    .map(|p| p.join("chats"))
+                    .or_else(|| {
+                        self.accounts_dir
+                            .as_deref()
+                            .and_then(Path::parent)
+                            .map(|p| p.join("chats"))
+                    });
                 Session::spawn_chat(
                     id.clone(),
                     params,
+                    agent_kind,
                     chats_dir.as_deref(),
                     self.events_tx.clone(),
                 )
@@ -448,6 +501,19 @@ pub(crate) fn session_error_to_rpc(err: SessionError) -> RpcError {
         SessionError::PermissionNotFound { .. } => ERR_PERMISSION_NOT_FOUND,
         SessionError::ChatBusy { .. } => ERR_CHAT_BUSY,
         SessionError::Io(_) => -32603,
+    };
+    RpcError {
+        code,
+        message: err.to_string(),
+    }
+}
+
+pub(crate) fn acp_error_to_rpc(err: AcpError) -> RpcError {
+    let code = match err {
+        AcpError::MissingAdapter(_) => ERR_ADAPTER_NOT_FOUND,
+        AcpError::BuiltInAdapter | AcpError::NoDataDir => ERR_INVALID_PARAMS,
+        AcpError::InstallFailed(_) => ERR_ADAPTER_INSTALL_FAILED,
+        AcpError::Io(_) => -32603,
     };
     RpcError {
         code,

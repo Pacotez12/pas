@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod acp;
 pub mod chat;
 pub mod claude;
 pub mod config;

@@ -3,15 +3,16 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use pas_core::protocol::{
-    AccountAddParams, AccountRemoveParams, AccountRenameParams, ChatPermissionParams,
-    ChatPromptParams, ClaudeConversationsParams, CreateParams, CreateResult,
+    AccountAddParams, AccountRemoveParams, AccountRenameParams, AcpInstallParams,
+    ChatPermissionParams, ChatPromptParams, ClaudeConversationsParams, CreateParams, CreateResult,
     ERR_ACCOUNT_ALREADY_EXISTS, ERR_ACCOUNT_DIR_INVALID, ERR_ACCOUNT_NOT_FOUND,
     ERR_GROUP_ALREADY_EXISTS, ERR_GROUP_NOT_FOUND, ERR_HOOKS_CONFIG_INVALID, ERR_INVALID_PARAMS,
     ERR_METHOD_NOT_FOUND, ERR_NOT_A_GIT_REPO, ERR_PROJECT_ALREADY_EXISTS, ERR_PROJECT_NOT_FOUND,
     GroupCreateParams, GroupRenameParams, HookParams, IdParams, InputParams, METHOD_ACCOUNT_ADD,
     METHOD_ACCOUNT_INSTALL_HOOKS, METHOD_ACCOUNT_LIST, METHOD_ACCOUNT_REMOVE,
-    METHOD_ACCOUNT_RENAME, METHOD_ACCOUNT_UNINSTALL_HOOKS, METHOD_CHAT_CANCEL, METHOD_CHAT_HISTORY,
-    METHOD_CHAT_PERMISSION, METHOD_CHAT_PROMPT, METHOD_CLAUDE_CONVERSATIONS, METHOD_DAEMON_PING,
+    METHOD_ACCOUNT_RENAME, METHOD_ACCOUNT_UNINSTALL_HOOKS, METHOD_ACP_INSTALL, METHOD_ACP_STATUS,
+    METHOD_CHAT_CANCEL, METHOD_CHAT_HISTORY, METHOD_CHAT_PERMISSION, METHOD_CHAT_PROMPT,
+    METHOD_CHAT_TERMINAL_COMMAND, METHOD_CLAUDE_CONVERSATIONS, METHOD_DAEMON_PING,
     METHOD_GROUP_CREATE, METHOD_GROUP_LIST, METHOD_GROUP_RENAME, METHOD_PROJECT_ADD,
     METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE, METHOD_PROJECT_REMOVE, METHOD_PROJECT_RENAME,
     METHOD_PROJECT_UNPIN, METHOD_QUOTA_LIST, METHOD_QUOTA_REPORT, METHOD_SESSION_CREATE,
@@ -270,6 +271,20 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
             let session = mgr.get(&params.id)?;
             let events = session.chat_history().map_err(session_error_to_rpc)?;
             ok_json(events)
+        }
+        METHOD_CHAT_TERMINAL_COMMAND => {
+            let params: IdParams = parse_params(req.params)?;
+            let session = mgr.get(&params.id)?;
+            let command = session
+                .chat_terminal_command()
+                .map_err(session_error_to_rpc)?;
+            ok_json(command)
+        }
+        METHOD_ACP_STATUS => ok_json(mgr.acp_status()),
+        METHOD_ACP_INSTALL => {
+            let params: AcpInstallParams = parse_params(req.params)?;
+            let status = mgr.acp_install(params.agent).await?;
+            ok_json(status)
         }
         other => Err(RpcError {
             code: ERR_METHOD_NOT_FOUND,
