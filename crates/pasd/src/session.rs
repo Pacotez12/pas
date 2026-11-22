@@ -442,18 +442,17 @@ impl Session {
             .await;
         }
 
+        if !appeared {
+            // A blind Enter could confirm whatever dialog swallowed the text.
+            return Ok(Some(format!(
+                "{} no mostró el texto en su prompt y no mandé Enter; revisá la sesión con pas read",
+                self.title
+            )));
+        }
         if enter {
             self.input(b"\r")?;
         }
-
-        if appeared {
-            Ok(None)
-        } else {
-            Ok(Some(format!(
-                "{} no mostró el texto en su prompt; revisá la sesión con pas read",
-                self.title
-            )))
-        }
+        Ok(None)
     }
 
     pub fn input(&self, data: &[u8]) -> Result<(), SessionError> {

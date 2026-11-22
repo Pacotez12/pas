@@ -536,7 +536,7 @@ async fn send_warns_when_text_never_appears() {
         .and_then(Value::as_str);
     assert_eq!(
         warning,
-        Some("agy no mostró el texto en su prompt; revisá la sesión con pas read")
+        Some("agy no mostró el texto en su prompt y no mandé Enter; revisá la sesión con pas read")
     );
 
     dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;
@@ -598,6 +598,83 @@ async fn send_multiline_delivers_all_lines() {
         read.text.contains("primera linea") && read.text.contains("segunda linea"),
         "salida multilínea incompleta: {:?}",
         read.text
+    );
+
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;
+}
+
+#[tokio::test]
+async fn send_without_echo_does_not_press_enter() {
+    // Si el texto nunca aparece (p. ej. agy muestra un diálogo), un Enter a ciegas
+    // podría confirmar ese diálogo: pas no debe mandarlo.
+    let mgr = Manager::new(200);
+    let r = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_CREATE,
+            json!({
+                "command": [fake_agent_bin()],
+                "cwd": std::env::temp_dir(),
+                "title": "sin-enter",
+                "env": { "FAKE_AGENT_DROP_INPUTS": "2" },
+            }),
+        ),
+    )
+    .await;
+    let created: CreateResult = serde_json::from_value(r.result.unwrap()).unwrap();
+    let wait_idle = || {
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 5000 }),
+        )
+    };
+    dispatch(&mgr, wait_idle()).await;
+
+    let first = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_SEND,
+            json!({ "id": created.id, "text": "echo uno" }),
+        ),
+    )
+    .await;
+    assert!(
+        first
+            .result
+            .as_ref()
+            .and_then(|v| v.get("warning"))
+            .is_some()
+    );
+
+    let second = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_SEND,
+            json!({ "id": created.id, "text": "echo dos" }),
+        ),
+    )
+    .await;
+    assert!(second.error.is_none(), "error: {:?}", second.error);
+    dispatch(&mgr, wait_idle()).await;
+
+    let read_res = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_READ,
+            json!({ "id": created.id, "lines": 10 }),
+        ),
+    )
+    .await;
+    let read: ReadResult = serde_json::from_value(read_res.result.unwrap()).unwrap();
+    let lines: Vec<&str> = read.text.lines().map(str::trim_end).collect();
+    let pos = lines
+        .iter()
+        .position(|l| l.contains("echo dos"))
+        .expect("echo dos debería verse");
+    assert_eq!(
+        lines[pos - 1],
+        "fake-agent listo",
+        "no debería haber un Enter suelto antes; pantalla: {lines:?}"
     );
 
     dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;

@@ -351,7 +351,9 @@ fn send_prints_warning_to_stderr_when_text_never_appears() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("agy no mostró el texto en su prompt; revisá la sesión con pas read"),
+        stderr.contains(
+            "agy no mostró el texto en su prompt y no mandé Enter; revisá la sesión con pas read"
+        ),
         "esperaba aviso en stderr, salió: {stderr:?}"
     );
 
