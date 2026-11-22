@@ -253,11 +253,12 @@ async fn hook_sets_waiting_then_running() {
         .unwrap();
 
         assert_eq!(res.code, Some(0), "{agent}/{event} debe salir 0");
-        assert_eq!(
-            res.stdout.trim(),
-            "{}",
-            "{agent}/{event} debe imprimir {{}}"
-        );
+        let want = match (agent, event) {
+            ("agy", "PreToolUse") => "",
+            ("agy", "Stop") => r#"{"decision":""}"#,
+            _ => "{}",
+        };
+        assert_eq!(res.stdout.trim(), want, "{agent}/{event} salida del hook");
         assert_eq!(
             session.state(),
             expected,

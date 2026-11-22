@@ -39,5 +39,30 @@ pub async fn run(agent: &str, event: &str) {
         .await;
     }
 
-    let _ = writeln!(io::stdout().lock(), "{{}}");
+    if let Some(reply) = hook_reply(agent, event) {
+        let _ = writeln!(io::stdout().lock(), "{reply}");
+    }
+}
+
+/// What the agent expects on stdout. agy reads `{}` on PreToolUse as a denial
+/// and wants an empty decision on Stop (same replies Orca's hooks give).
+fn hook_reply(agent: &str, event: &str) -> Option<&'static str> {
+    match (agent, event) {
+        ("agy", "PreToolUse") => None,
+        ("agy", "Stop") => Some(r#"{"decision":""}"#),
+        _ => Some("{}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hook_reply;
+
+    #[test]
+    fn agy_pre_tool_use_prints_nothing_so_tools_are_not_denied() {
+        assert_eq!(hook_reply("agy", "PreToolUse"), None);
+        assert_eq!(hook_reply("agy", "Stop"), Some(r#"{"decision":""}"#));
+        assert_eq!(hook_reply("agy", "PreInvocation"), Some("{}"));
+        assert_eq!(hook_reply("claude", "PreToolUse"), Some("{}"));
+    }
 }
