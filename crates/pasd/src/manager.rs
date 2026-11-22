@@ -11,6 +11,7 @@ use serde_json::json;
 use tokio::sync::broadcast;
 
 use crate::session::{Session, SessionError};
+use crate::store::Store;
 
 const EVENTS_BROADCAST_CAPACITY: usize = 256;
 
@@ -19,16 +20,27 @@ pub struct Manager {
     idle_ms: u64,
     sessions: RwLock<HashMap<String, Arc<Session>>>,
     events_tx: broadcast::Sender<Notification>,
+    store: Store,
 }
 
 impl Manager {
     pub fn new(idle_ms: u64) -> Arc<Self> {
+        let store = Store::open_in_memory().expect("no se pudo abrir SQLite en memoria");
+        Self::with_store(idle_ms, store)
+    }
+
+    pub fn with_store(idle_ms: u64, store: Store) -> Arc<Self> {
         let (events_tx, _) = broadcast::channel(EVENTS_BROADCAST_CAPACITY);
         Arc::new(Self {
             idle_ms,
             sessions: RwLock::new(HashMap::new()),
             events_tx,
+            store,
         })
+    }
+
+    pub fn store(&self) -> &Store {
+        &self.store
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<Notification> {

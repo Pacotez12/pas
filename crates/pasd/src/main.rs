@@ -6,6 +6,7 @@ use clap::Parser;
 use pas_core::socket::socket_path;
 use pasd::manager::Manager;
 use pasd::server;
+use pasd::store::Store;
 use tokio::signal::unix::{SignalKind, signal};
 
 #[derive(Parser)]
@@ -14,8 +15,23 @@ struct Args {
     #[arg(long)]
     socket: Option<PathBuf>,
 
+    #[arg(long)]
+    data_dir: Option<PathBuf>,
+
     #[arg(long, default_value_t = 1500)]
     idle_ms: u64,
+}
+
+fn default_data_dir() -> Result<PathBuf, String> {
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(xdg).join("pas"));
+    }
+    if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(home).join(".local").join("share").join("pas"));
+    }
+    Err(
+        "No se encontró HOME ni XDG_DATA_HOME. Pasá --data-dir con la carpeta de datos.".into(),
+    )
 }
 
 #[tokio::main]
@@ -36,6 +52,25 @@ async fn main() -> ExitCode {
         },
     };
 
+    let data_dir = match args.data_dir {
+        Some(d) => d,
+        None => match default_data_dir() {
+            Ok(d) => d,
+            Err(err) => {
+                eprintln!("{err}");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+
+    let store = match Store::open(&data_dir.join("pas.db")) {
+        Ok(s) => s,
+        Err(err) => {
+            eprintln!("{err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let listener = match server::bind(&path) {
         Ok(l) => l,
         Err(err) => {
@@ -45,7 +80,7 @@ async fn main() -> ExitCode {
     };
 
     tracing::info!("pasd escuchando en {}", path.display());
-    let mgr = Manager::new(args.idle_ms);
+    let mgr = Manager::with_store(args.idle_ms, store);
 
     tokio::select! {
         _ = server::serve(listener, Arc::clone(&mgr)) => {}

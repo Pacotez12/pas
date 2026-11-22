@@ -3,16 +3,22 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use pas_core::protocol::{
-    CreateParams, CreateResult, ERR_INVALID_PARAMS, ERR_METHOD_NOT_FOUND, IdParams, InputParams,
-    METHOD_DAEMON_PING, METHOD_SESSION_CREATE, METHOD_SESSION_INPUT, METHOD_SESSION_KILL,
+    CreateParams, CreateResult, ERR_GROUP_ALREADY_EXISTS, ERR_GROUP_NOT_FOUND, ERR_INVALID_PARAMS,
+    ERR_METHOD_NOT_FOUND, ERR_NOT_A_GIT_REPO, ERR_PROJECT_ALREADY_EXISTS, ERR_PROJECT_NOT_FOUND,
+    GroupCreateParams, GroupRenameParams, IdParams, InputParams, METHOD_DAEMON_PING,
+    METHOD_GROUP_CREATE, METHOD_GROUP_LIST, METHOD_GROUP_RENAME, METHOD_PROJECT_ADD,
+    METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE, METHOD_PROJECT_REMOVE, METHOD_PROJECT_RENAME,
+    METHOD_PROJECT_UNPIN, METHOD_SESSION_CREATE, METHOD_SESSION_INPUT, METHOD_SESSION_KILL,
     METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_RESIZE, METHOD_SESSION_SEND,
-    METHOD_SESSION_SNAPSHOT, METHOD_SESSION_WAIT, PingResult, ReadParams, ReadResult, Request,
-    ResizeParams, Response, RpcError, SendParams, SnapshotResult, WaitParams,
+    METHOD_SESSION_SNAPSHOT, METHOD_SESSION_WAIT, PingResult, ProjectAddParams, ProjectMoveParams,
+    ProjectRenameParams, ReadParams, ReadResult, Request, ResizeParams, Response, RpcError,
+    SendParams, SnapshotResult, WaitParams,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::manager::{Manager, session_error_to_rpc};
+use crate::store::StoreError;
 
 pub async fn dispatch(mgr: &Manager, req: Request) -> Response {
     let id = req.id;
@@ -91,10 +97,89 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
             mgr.kill(&params.id)?;
             Ok(json!({}))
         }
+        METHOD_PROJECT_ADD => {
+            let params: ProjectAddParams = parse_params(req.params)?;
+            let project = mgr
+                .store()
+                .add_project(&params.path, params.name.as_deref())
+                .map_err(store_error_to_rpc)?;
+            ok_json(project)
+        }
+        METHOD_PROJECT_LIST => {
+            let projects = mgr.store().list_projects().map_err(store_error_to_rpc)?;
+            ok_json(projects)
+        }
+        METHOD_PROJECT_REMOVE => {
+            let params: IdParams = parse_params(req.params)?;
+            mgr.store()
+                .remove_project(&params.id)
+                .map_err(store_error_to_rpc)?;
+            Ok(json!({}))
+        }
+        METHOD_PROJECT_RENAME => {
+            let params: ProjectRenameParams = parse_params(req.params)?;
+            let project = mgr
+                .store()
+                .rename_project(&params.id, &params.name)
+                .map_err(store_error_to_rpc)?;
+            ok_json(project)
+        }
+        METHOD_PROJECT_MOVE => {
+            let params: ProjectMoveParams = parse_params(req.params)?;
+            let project = mgr
+                .store()
+                .move_project(&params.id, &params.group_id)
+                .map_err(store_error_to_rpc)?;
+            ok_json(project)
+        }
+        METHOD_PROJECT_UNPIN => {
+            let params: IdParams = parse_params(req.params)?;
+            let project = mgr
+                .store()
+                .unpin_project(&params.id)
+                .map_err(store_error_to_rpc)?;
+            ok_json(project)
+        }
+        METHOD_GROUP_LIST => {
+            let groups = mgr.store().list_groups().map_err(store_error_to_rpc)?;
+            ok_json(groups)
+        }
+        METHOD_GROUP_CREATE => {
+            let params: GroupCreateParams = parse_params(req.params)?;
+            let group = mgr
+                .store()
+                .create_group(&params.name)
+                .map_err(store_error_to_rpc)?;
+            ok_json(group)
+        }
+        METHOD_GROUP_RENAME => {
+            let params: GroupRenameParams = parse_params(req.params)?;
+            let group = mgr
+                .store()
+                .rename_group(&params.id, &params.name)
+                .map_err(store_error_to_rpc)?;
+            ok_json(group)
+        }
         other => Err(RpcError {
             code: ERR_METHOD_NOT_FOUND,
             message: format!("Método desconocido: {other}."),
         }),
+    }
+}
+
+fn store_error_to_rpc(err: StoreError) -> RpcError {
+    let code = match err {
+        StoreError::NotAGitRepo { .. } => ERR_NOT_A_GIT_REPO,
+        StoreError::ProjectAlreadyExists { .. } => ERR_PROJECT_ALREADY_EXISTS,
+        StoreError::ProjectNotFound { .. } => ERR_PROJECT_NOT_FOUND,
+        StoreError::GroupNotFound { .. } => ERR_GROUP_NOT_FOUND,
+        StoreError::GroupAlreadyExists { .. } => ERR_GROUP_ALREADY_EXISTS,
+        StoreError::EmptyName { .. } => ERR_INVALID_PARAMS,
+        StoreError::Sqlite(_) | StoreError::Io(_) => -32603,
+    };
+    RpcError {
+        code,
+        message: err.to_string(),
     }
 }
 

@@ -167,6 +167,8 @@ fn stage2_types_roundtrip() {
         id: "p1".into(),
         name: "pas".into(),
         path: PathBuf::from("/tmp/repo"),
+        group_id: "g1".into(),
+        group_pinned: false,
     };
     assert_eq!(
         serde_json::from_str::<ProjectInfo>(&serde_json::to_string(&proj).unwrap()).unwrap(),

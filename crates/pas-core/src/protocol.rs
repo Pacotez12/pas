@@ -20,6 +20,12 @@ pub const METHOD_SESSION_SUBSCRIBE_ALL: &str = "session.subscribe_all";
 pub const METHOD_PROJECT_ADD: &str = "project.add";
 pub const METHOD_PROJECT_LIST: &str = "project.list";
 pub const METHOD_PROJECT_REMOVE: &str = "project.remove";
+pub const METHOD_PROJECT_RENAME: &str = "project.rename";
+pub const METHOD_PROJECT_MOVE: &str = "project.move";
+pub const METHOD_PROJECT_UNPIN: &str = "project.unpin";
+pub const METHOD_GROUP_LIST: &str = "group.list";
+pub const METHOD_GROUP_CREATE: &str = "group.create";
+pub const METHOD_GROUP_RENAME: &str = "group.rename";
 
 pub const EVENT_SESSION_OUTPUT: &str = "session.output";
 pub const EVENT_SESSION_STATE: &str = "session.state";
@@ -32,6 +38,11 @@ pub const ERR_SESSION_NOT_FOUND: i32 = 1001;
 pub const ERR_SPAWN_FAILED: i32 = 1002;
 pub const ERR_WAIT_TIMEOUT: i32 = 1003;
 pub const ERR_SESSION_EXITED: i32 = 1004;
+pub const ERR_PROJECT_NOT_FOUND: i32 = 1005;
+pub const ERR_PROJECT_ALREADY_EXISTS: i32 = 1006;
+pub const ERR_NOT_A_GIT_REPO: i32 = 1007;
+pub const ERR_GROUP_NOT_FOUND: i32 = 1008;
+pub const ERR_GROUP_ALREADY_EXISTS: i32 = 1009;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
@@ -223,6 +234,40 @@ pub struct ProjectInfo {
     pub id: String,
     pub name: String,
     pub path: PathBuf,
+    pub group_id: String,
+    #[serde(default)]
+    pub group_pinned: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectRenameParams {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectMoveParams {
+    pub id: String,
+    pub group_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupInfo {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub remote_key: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupCreateParams {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupRenameParams {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

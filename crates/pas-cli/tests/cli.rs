@@ -23,6 +23,7 @@ impl TestEnv {
     fn pas(&self) -> AssertCommand {
         let mut cmd = AssertCommand::new(env!("CARGO_BIN_EXE_pas"));
         cmd.env("PAS_SOCKET", &self.sock);
+        cmd.env("XDG_DATA_HOME", self._dir.path().join("data"));
         cmd
     }
 }
