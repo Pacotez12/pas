@@ -601,6 +601,7 @@ async fn agy_stop_deferred_while_busy_bar_visible_then_idle_on_clear() {
     let session = mgr.get(&created.id).unwrap();
     assert_eq!(session.state(), SessionState::Idle);
 
+    pas_bin(); // compile before the busy window, not inside it
     session.send("busy 3000", true).await.unwrap();
     wait_for_screen_contains(&session, "esc to cancel", Duration::from_secs(2)).await;
 
@@ -692,6 +693,7 @@ async fn stop_without_busy_patterns_transitions_to_idle_immediately() {
     .await;
 
     let session = mgr.get(&created.id).unwrap();
+    pas_bin(); // compile before the busy window, not inside it
     session.send("busy 3000", true).await.unwrap();
     wait_for_screen_contains(&session, "esc to cancel", Duration::from_secs(2)).await;
 
@@ -748,6 +750,7 @@ async fn heuristic_idle_deferred_while_busy_bar_visible() {
     .await;
 
     let session = mgr.get(&created.id).unwrap();
+    pas_bin(); // compile before the busy window, not inside it
     session.send("busy 3000", true).await.unwrap();
     wait_for_screen_contains(&session, "esc to cancel", Duration::from_secs(2)).await;
 
@@ -819,6 +822,7 @@ async fn hook_waiting_is_immediate_and_clears_pending_idle() {
     .await;
 
     let session = mgr.get(&created.id).unwrap();
+    pas_bin(); // compile before the busy window, not inside it
     session.send("busy 3000", true).await.unwrap();
     wait_for_screen_contains(&session, "esc to cancel", Duration::from_secs(2)).await;
 
