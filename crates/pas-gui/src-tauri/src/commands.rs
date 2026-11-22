@@ -307,10 +307,6 @@ pub fn save_layout(json: String) -> Result<(), String> {
             )
         })?;
     }
-    std::fs::write(&path, json).map_err(|err| {
-        format!(
-            "No se pudo guardar el layout en {}: {err}",
-            path.display()
-        )
-    })
+    std::fs::write(&path, json)
+        .map_err(|err| format!("No se pudo guardar el layout en {}: {err}", path.display()))
 }

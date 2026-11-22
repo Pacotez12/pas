@@ -174,7 +174,10 @@ async fn script_emits_tool_diff_and_visual() {
     );
 
     let visual_path = tmp.path().join("mockup.html");
-    assert_eq!(std::fs::read_to_string(&visual_path).unwrap(), "<h1>Hola</h1>");
+    assert_eq!(
+        std::fs::read_to_string(&visual_path).unwrap(),
+        "<h1>Hola</h1>"
+    );
 }
 
 #[tokio::test]
@@ -250,10 +253,25 @@ async fn script_requests_permission_and_handles_choice() {
         .unwrap()
         .take()
         .expect("should have received permission request");
-    assert_eq!(req.tool_call.fields.title.as_deref(), Some("Ejecutar cargo test"));
-    assert!(req.options.iter().any(|o| o.kind == PermissionOptionKind::AllowOnce));
-    assert!(req.options.iter().any(|o| o.kind == PermissionOptionKind::AllowAlways));
-    assert!(req.options.iter().any(|o| o.kind == PermissionOptionKind::RejectOnce));
+    assert_eq!(
+        req.tool_call.fields.title.as_deref(),
+        Some("Ejecutar cargo test")
+    );
+    assert!(
+        req.options
+            .iter()
+            .any(|o| o.kind == PermissionOptionKind::AllowOnce)
+    );
+    assert!(
+        req.options
+            .iter()
+            .any(|o| o.kind == PermissionOptionKind::AllowAlways)
+    );
+    assert!(
+        req.options
+            .iter()
+            .any(|o| o.kind == PermissionOptionKind::RejectOnce)
+    );
     assert_eq!(*chunks.lock().unwrap(), vec!["Permiso concedido"]);
 }
 

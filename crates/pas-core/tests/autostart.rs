@@ -27,7 +27,10 @@ fn pas_pasd_bin_override_prevents_autostart_when_missing() {
     }
 
     let status = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "pas_pasd_bin_override_prevents_autostart_when_missing"])
+        .args([
+            "--exact",
+            "pas_pasd_bin_override_prevents_autostart_when_missing",
+        ])
         .env("PAS_TEST_CHILD", "1")
         .env(ENV_PASD_BIN, "/ruta/inexistente/pasd-test")
         .status()

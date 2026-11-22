@@ -130,11 +130,7 @@ fn extract_prompt_text(blocks: &[ContentBlock]) -> String {
         .join("\n")
 }
 
-fn send_text_chunk(
-    cx: &ConnectionTo<Client>,
-    session_id: &SessionId,
-    text: String,
-) -> Result<()> {
+fn send_text_chunk(cx: &ConnectionTo<Client>, session_id: &SessionId, text: String) -> Result<()> {
     cx.send_notification(SessionNotification::new(
         session_id.clone(),
         SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
@@ -195,8 +191,8 @@ async fn run_prompt_steps(
                 status,
             } => {
                 let tool_id = state.lock().unwrap().next_tool_call_id(id);
-                let mut tc = ToolCall::new(tool_id.clone(), title)
-                    .status(ToolCallStatus::InProgress);
+                let mut tc =
+                    ToolCall::new(tool_id.clone(), title).status(ToolCallStatus::InProgress);
                 if let Some(name) = name {
                     tc = tc.name(name);
                 }
@@ -436,10 +432,19 @@ async fn main() -> Result<()> {
                 let script_task = script.clone();
                 let cx_task = cx.clone();
                 cx.spawn(async move {
-                    let res =
-                        run_prompt_steps(cx_task, Arc::clone(&state_task), script_task, req, cancel_rx)
-                            .await;
-                    state_task.lock().unwrap().cancel_senders.remove(&session_key);
+                    let res = run_prompt_steps(
+                        cx_task,
+                        Arc::clone(&state_task),
+                        script_task,
+                        req,
+                        cancel_rx,
+                    )
+                    .await;
+                    state_task
+                        .lock()
+                        .unwrap()
+                        .cancel_senders
+                        .remove(&session_key);
                     match res {
                         Ok(stop_reason) => responder.respond(PromptResponse::new(stop_reason)),
                         Err(err) => responder.respond_with_error(err),

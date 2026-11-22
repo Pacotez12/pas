@@ -53,8 +53,7 @@ fn state_json_shape() {
 
 #[test]
 fn create_params_defaults() {
-    let params: CreateParams =
-        serde_json::from_str(r#"{"command":["sh"],"cwd":"/tmp"}"#).unwrap();
+    let params: CreateParams = serde_json::from_str(r#"{"command":["sh"],"cwd":"/tmp"}"#).unwrap();
 
     assert_eq!(params.command, vec!["sh"]);
     assert_eq!(params.cwd, PathBuf::from("/tmp"));
@@ -120,8 +119,7 @@ fn chat_types_roundtrip() {
 
 #[test]
 fn send_params_default_enter() {
-    let params: SendParams =
-        serde_json::from_str(r#"{"id":"s1","text":"ls"}"#).unwrap();
+    let params: SendParams = serde_json::from_str(r#"{"id":"s1","text":"ls"}"#).unwrap();
     assert!(params.enter);
 }
 

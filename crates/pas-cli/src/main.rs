@@ -170,10 +170,7 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
         }
         Commands::Read { session, lines } => {
             let res: ReadResult = client
-                .call(
-                    METHOD_SESSION_READ,
-                    ReadParams { id: session, lines },
-                )
+                .call(METHOD_SESSION_READ, ReadParams { id: session, lines })
                 .await?;
             if !res.text.is_empty() {
                 println!("{}", res.text);

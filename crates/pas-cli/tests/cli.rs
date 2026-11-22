@@ -108,7 +108,11 @@ fn autostart_and_flow() {
         .args(["new", "--title", "t", "--", &fake_agent_bin()])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
     assert_eq!(id.len(), 8);
 

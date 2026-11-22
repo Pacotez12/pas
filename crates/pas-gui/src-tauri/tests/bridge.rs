@@ -150,7 +150,10 @@ async fn bridge_forwards_output_events() {
     })
     .await
     .expect("timeout esperando pas://output");
-    assert!(got_output, "no llegó 'puente-ok' en pas://output: {collected:?}");
+    assert!(
+        got_output,
+        "no llegó 'puente-ok' en pas://output: {collected:?}"
+    );
 
     bridge.unsubscribe(created.id.clone()).await.unwrap();
     bridge.kill_session(created.id.clone()).await.unwrap();
@@ -231,4 +234,3 @@ async fn bridge_projects_and_groups_roundtrip() {
     mgr.kill_all();
     server.abort();
 }
-

@@ -132,11 +132,7 @@ impl Bridge {
         Ok(())
     }
 
-    pub async fn rename_project(
-        &self,
-        id: String,
-        name: String,
-    ) -> Result<ProjectInfo, CoreError> {
+    pub async fn rename_project(&self, id: String, name: String) -> Result<ProjectInfo, CoreError> {
         self.call(METHOD_PROJECT_RENAME, ProjectRenameParams { id, name })
             .await
     }
@@ -226,7 +222,10 @@ impl Bridge {
 
     pub async fn remove_account(&self, id: String, delete_dir: bool) -> Result<(), CoreError> {
         let _: Value = self
-            .call(METHOD_ACCOUNT_REMOVE, AccountRemoveParams { id, delete_dir })
+            .call(
+                METHOD_ACCOUNT_REMOVE,
+                AccountRemoveParams { id, delete_dir },
+            )
             .await?;
         Ok(())
     }

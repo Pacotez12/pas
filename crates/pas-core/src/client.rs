@@ -24,10 +24,12 @@ pub struct Client {
 impl Client {
     pub async fn connect(path: &Path) -> Result<Self, CoreError> {
         validate_socket_path(path)?;
-        let stream = UnixStream::connect(path).await.map_err(|e| match e.kind() {
-            ErrorKind::NotFound | ErrorKind::ConnectionRefused => CoreError::NotRunning,
-            _ => CoreError::Io(e),
-        })?;
+        let stream = UnixStream::connect(path)
+            .await
+            .map_err(|e| match e.kind() {
+                ErrorKind::NotFound | ErrorKind::ConnectionRefused => CoreError::NotRunning,
+                _ => CoreError::Io(e),
+            })?;
         Ok(Self {
             stream: BufReader::new(stream),
             read_buf: Vec::new(),
