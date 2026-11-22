@@ -37,6 +37,10 @@ pub const METHOD_ACCOUNT_UNINSTALL_HOOKS: &str = "account.uninstall_hooks";
 pub const METHOD_QUOTA_REPORT: &str = "quota.report";
 pub const METHOD_QUOTA_LIST: &str = "quota.list";
 pub const METHOD_CLAUDE_CONVERSATIONS: &str = "claude.conversations";
+pub const METHOD_CHAT_PROMPT: &str = "chat.prompt";
+pub const METHOD_CHAT_PERMISSION: &str = "chat.permission";
+pub const METHOD_CHAT_CANCEL: &str = "chat.cancel";
+pub const METHOD_CHAT_HISTORY: &str = "chat.history";
 
 pub const EVENT_SESSION_OUTPUT: &str = "session.output";
 pub const EVENT_SESSION_STATE: &str = "session.state";
@@ -45,6 +49,7 @@ pub const EVENT_SESSION_REMOVED: &str = "session.removed";
 pub const EVENT_SESSION_FOCUS_REQUEST: &str = "session.focus_request";
 pub const EVENT_QUOTA_CHANGED: &str = "quota.changed";
 pub const EVENT_QUOTA_WARNING: &str = "quota.warning";
+pub const EVENT_CHAT_EVENT: &str = "chat.event";
 
 pub const ERR_METHOD_NOT_FOUND: i32 = -32601;
 pub const ERR_INVALID_PARAMS: i32 = -32602;
@@ -62,6 +67,9 @@ pub const ERR_ACCOUNT_NOT_FOUND: i32 = 1011;
 pub const ERR_ACCOUNT_ALREADY_EXISTS: i32 = 1012;
 pub const ERR_ACCOUNT_DIR_INVALID: i32 = 1013;
 pub const ERR_HOOKS_CONFIG_INVALID: i32 = 1014;
+pub const ERR_WRONG_SESSION_MODE: i32 = 1015;
+pub const ERR_PERMISSION_NOT_FOUND: i32 = 1016;
+pub const ERR_CHAT_BUSY: i32 = 1017;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
@@ -135,6 +143,14 @@ pub enum SessionState {
     Exited { code: Option<i32> },
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    #[default]
+    Terminal,
+    Chat,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
@@ -147,6 +163,8 @@ pub struct SessionInfo {
     pub project_id: Option<String>,
     #[serde(default)]
     pub account_id: Option<String>,
+    #[serde(default)]
+    pub mode: Mode,
 }
 
 fn default_cols() -> u16 {
@@ -177,6 +195,8 @@ pub struct CreateParams {
     pub project_id: Option<String>,
     #[serde(default)]
     pub account_id: Option<String>,
+    #[serde(default)]
+    pub mode: Mode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -454,4 +474,68 @@ pub struct QuotaWarningEvent {
     pub used_percent: f32,
     pub resets_at: i64,
     pub threshold_percent: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionChoice {
+    Allow,
+    AllowSession,
+    Deny,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatPromptParams {
+    pub id: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatPermissionParams {
+    pub id: String,
+    pub request_id: String,
+    pub choice: PermissionChoice,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChatEvent {
+    UserMessage {
+        text: String,
+    },
+    AgentChunk {
+        text: String,
+    },
+    AgentMessageEnd,
+    ToolCall {
+        id: String,
+        title: String,
+        status: String,
+    },
+    Diff {
+        path: String,
+        unified: String,
+    },
+    PermissionRequest {
+        request_id: String,
+        title: String,
+        #[serde(default)]
+        detail: Option<String>,
+    },
+    PermissionResolved {
+        request_id: String,
+        choice: PermissionChoice,
+    },
+    Visual {
+        file: String,
+    },
+    Error {
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatEventNotification {
+    pub id: String,
+    pub event: ChatEvent,
 }

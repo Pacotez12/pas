@@ -253,7 +253,11 @@ async fn hook_sets_waiting_then_running() {
         .unwrap();
 
         assert_eq!(res.code, Some(0), "{agent}/{event} debe salir 0");
-        assert_eq!(res.stdout.trim(), "{}", "{agent}/{event} debe imprimir {{}}");
+        assert_eq!(
+            res.stdout.trim(),
+            "{}",
+            "{agent}/{event} debe imprimir {{}}"
+        );
         assert_eq!(
             session.state(),
             expected,

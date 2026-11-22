@@ -5,12 +5,12 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use pas_core::protocol::{
-    AccountQuota, AgentKind, CreateParams, ERR_INVALID_PARAMS, ERR_SESSION_EXITED,
-    ERR_SESSION_NOT_FOUND, ERR_SESSION_RUNNING, ERR_SPAWN_FAILED, ERR_WAIT_TIMEOUT,
-    EVENT_QUOTA_CHANGED, EVENT_QUOTA_WARNING, EVENT_SESSION_CREATED, EVENT_SESSION_FOCUS_REQUEST,
-    EVENT_SESSION_REMOVED, EVENT_SESSION_STATE, Notification, QuotaReportParams, RpcError,
-    SessionCreatedEvent, SessionFocusRequestEvent, SessionInfo, SessionRemovedEvent, SessionState,
-    SessionStateEvent,
+    AccountQuota, AgentKind, CreateParams, ERR_CHAT_BUSY, ERR_INVALID_PARAMS,
+    ERR_PERMISSION_NOT_FOUND, ERR_SESSION_EXITED, ERR_SESSION_NOT_FOUND, ERR_SESSION_RUNNING,
+    ERR_SPAWN_FAILED, ERR_WAIT_TIMEOUT, ERR_WRONG_SESSION_MODE, EVENT_QUOTA_CHANGED,
+    EVENT_QUOTA_WARNING, EVENT_SESSION_CREATED, EVENT_SESSION_FOCUS_REQUEST, EVENT_SESSION_REMOVED,
+    EVENT_SESSION_STATE, Mode, Notification, QuotaReportParams, RpcError, SessionCreatedEvent,
+    SessionFocusRequestEvent, SessionInfo, SessionRemovedEvent, SessionState, SessionStateEvent,
 };
 use pas_core::socket::socket_path as default_socket_path;
 use serde_json::json;
@@ -18,6 +18,7 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 use crate::accounts;
+use crate::chat;
 use crate::config::Config;
 use crate::notify::{NoopNotifier, Notifier, WaitingNotice};
 use crate::quota::{self, QuotaTracker, QuotaUpdate};
@@ -25,7 +26,7 @@ use crate::rpc::store_error_to_rpc;
 use crate::session::{Session, SessionError};
 use crate::store::{Store, StoreError};
 
-const EVENTS_BROADCAST_CAPACITY: usize = 256;
+const EVENTS_BROADCAST_CAPACITY: usize = 1024;
 
 pub struct Manager {
     idle_ms: u64,
@@ -142,7 +143,9 @@ impl Manager {
             if acc.agent != AgentKind::Codex {
                 continue;
             }
-            let update = self.quotas.poll_codex_account(&acc.id, &acc.config_dir, now);
+            let update = self
+                .quotas
+                .poll_codex_account(&acc.id, &acc.config_dir, now);
             self.emit_quota_update(update);
         }
     }
@@ -257,9 +260,14 @@ impl Manager {
             .clone()
             .or_else(|| default_socket_path().ok())
         {
-            params
-                .env
-                .insert("PAS_SOCKET".to_string(), sock.to_string_lossy().into_owned());
+            params.env.insert(
+                "PAS_SOCKET".to_string(),
+                sock.to_string_lossy().into_owned(),
+            );
+        }
+
+        if params.mode == Mode::Chat {
+            params.command = chat::resolve_adapter_command(&params.command, agent_kind);
         }
 
         let base_title = params
@@ -274,12 +282,27 @@ impl Manager {
         let id = unique_id(&sessions);
         params.title = Some(title.clone());
 
-        let session = Session::spawn_with_waiting_patterns(
-            id.clone(),
-            params,
-            self.idle_ms,
-            waiting_patterns,
-        )
+        let session = match params.mode {
+            Mode::Terminal => Session::spawn_with_waiting_patterns(
+                id.clone(),
+                params,
+                self.idle_ms,
+                waiting_patterns,
+            ),
+            Mode::Chat => {
+                let chats_dir = self
+                    .accounts_dir
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .map(|p| p.join("chats"));
+                Session::spawn_chat(
+                    id.clone(),
+                    params,
+                    chats_dir.as_deref(),
+                    self.events_tx.clone(),
+                )
+            }
+        }
         .map_err(session_error_to_rpc)?;
         sessions.insert(id.clone(), Arc::clone(&session));
         drop(sessions);
@@ -421,6 +444,9 @@ pub(crate) fn session_error_to_rpc(err: SessionError) -> RpcError {
         SessionError::Timeout { .. } => ERR_WAIT_TIMEOUT,
         SessionError::Exited { .. } => ERR_SESSION_EXITED,
         SessionError::InvalidSize => ERR_INVALID_PARAMS,
+        SessionError::WrongMode { .. } => ERR_WRONG_SESSION_MODE,
+        SessionError::PermissionNotFound { .. } => ERR_PERMISSION_NOT_FOUND,
+        SessionError::ChatBusy { .. } => ERR_CHAT_BUSY,
         SessionError::Io(_) => -32603,
     };
     RpcError {

@@ -153,6 +153,8 @@ async fn claude_conversations_uses_account_config_dir() {
         },
     )
     .await;
-    let err = missing_resp.error.expect("debería fallar si la cuenta no existe");
+    let err = missing_resp
+        .error
+        .expect("debería fallar si la cuenta no existe");
     assert_eq!(err.code, ERR_ACCOUNT_NOT_FOUND);
 }

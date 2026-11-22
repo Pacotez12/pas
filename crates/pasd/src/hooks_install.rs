@@ -42,7 +42,9 @@ pub enum HooksInstallError {
     )]
     PasBinNotFound,
 
-    #[error("Error accediendo a archivos de configuración: {0}. Revisá los permisos de la carpeta.")]
+    #[error(
+        "Error accediendo a archivos de configuración: {0}. Revisá los permisos de la carpeta."
+    )]
     Io(#[from] std::io::Error),
 }
 
@@ -136,22 +138,16 @@ pub fn is_installed(agent: AgentKind, config_dir: &Path) -> bool {
                 return false;
             };
             let simple_ok = AGY_SIMPLE_EVENTS.iter().all(|ev| {
-                group
-                    .get(*ev)
-                    .and_then(Value::as_array)
-                    .is_some_and(|arr| {
-                        arr.iter()
-                            .any(|item| is_pas_command_obj(item, AgentKind::Agy, ev))
-                    })
+                group.get(*ev).and_then(Value::as_array).is_some_and(|arr| {
+                    arr.iter()
+                        .any(|item| is_pas_command_obj(item, AgentKind::Agy, ev))
+                })
             });
             let matcher_ok = AGY_MATCHER_EVENTS.iter().all(|ev| {
-                group
-                    .get(*ev)
-                    .and_then(Value::as_array)
-                    .is_some_and(|arr| {
-                        arr.iter()
-                            .any(|item| group_contains_pas_hook(item, AgentKind::Agy, ev))
-                    })
+                group.get(*ev).and_then(Value::as_array).is_some_and(|arr| {
+                    arr.iter()
+                        .any(|item| group_contains_pas_hook(item, AgentKind::Agy, ev))
+                })
             });
             simple_ok && matcher_ok
         }
@@ -315,7 +311,9 @@ fn resolve_targets(agent: AgentKind, config_dir: &Path) -> Vec<TargetFile> {
     }
 }
 
-fn load_and_validate_targets(targets: &[TargetFile]) -> Result<Vec<LoadedTarget>, HooksInstallError> {
+fn load_and_validate_targets(
+    targets: &[TargetFile],
+) -> Result<Vec<LoadedTarget>, HooksInstallError> {
     let mut loaded = Vec::with_capacity(targets.len());
     for target in targets {
         match fs::read(&target.path) {
@@ -323,11 +321,10 @@ fn load_and_validate_targets(targets: &[TargetFile]) -> Result<Vec<LoadedTarget>
                 let mode = fs::metadata(&target.path)
                     .ok()
                     .map(|m| m.permissions().mode() & 0o777);
-                let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
-                    HooksInstallError::InvalidJson {
+                let value: Value =
+                    serde_json::from_slice(&bytes).map_err(|_| HooksInstallError::InvalidJson {
                         path: target.path.clone(),
-                    }
-                })?;
+                    })?;
                 if !value.is_object() {
                     return Err(HooksInstallError::InvalidJson {
                         path: target.path.clone(),

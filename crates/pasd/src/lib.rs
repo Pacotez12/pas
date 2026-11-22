@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod chat;
 pub mod claude;
 pub mod config;
 pub mod hooks_install;

@@ -354,9 +354,11 @@ impl Store {
         let tx = conn.transaction()?;
 
         let exists: Option<String> = tx
-            .query_row("SELECT id FROM groups WHERE name = ?1", params![name], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT id FROM groups WHERE name = ?1",
+                params![name],
+                |row| row.get(0),
+            )
             .optional()?;
         if exists.is_some() {
             return Err(StoreError::GroupAlreadyExists {
@@ -816,7 +818,9 @@ fn unique_id(tx: &Transaction<'_>, table: &str) -> Result<String, StoreError> {
             "{:02x}{:02x}{:02x}{:02x}",
             bytes[0], bytes[1], bytes[2], bytes[3]
         );
-        let exists: Option<i32> = tx.query_row(sql, params![&id], |row| row.get(0)).optional()?;
+        let exists: Option<i32> = tx
+            .query_row(sql, params![&id], |row| row.get(0))
+            .optional()?;
         if exists.is_none() {
             return Ok(id);
         }

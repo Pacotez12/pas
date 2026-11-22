@@ -109,6 +109,7 @@ pub async fn create_session(
             rows: rows.unwrap_or(40),
             project_id,
             account_id,
+            mode: pas_core::protocol::Mode::Terminal,
         })
         .await
         .map_err(|e| e.to_string())

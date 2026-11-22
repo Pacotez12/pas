@@ -12,9 +12,7 @@ pub fn remote_key(url: &str) -> Option<String> {
 
     let (host, path) = if let Some((_scheme, rest)) = trimmed.split_once("://") {
         let (authority, path) = rest.split_once('/')?;
-        let host_port = authority
-            .rsplit_once('@')
-            .map_or(authority, |(_, hp)| hp);
+        let host_port = authority.rsplit_once('@').map_or(authority, |(_, hp)| hp);
         let host = strip_numeric_port(host_port);
         (host, path)
     } else if let Some((left, path)) = trimmed.split_once(':') {

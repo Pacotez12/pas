@@ -6,8 +6,8 @@ use pas_core::protocol::{
     AccountInfo, AgentKind, CreateResult, ERR_ACCOUNT_ALREADY_EXISTS, ERR_ACCOUNT_DIR_INVALID,
     ERR_ACCOUNT_NOT_FOUND, ERR_INVALID_PARAMS, METHOD_ACCOUNT_ADD, METHOD_ACCOUNT_LIST,
     METHOD_ACCOUNT_REMOVE, METHOD_ACCOUNT_RENAME, METHOD_SESSION_CREATE, METHOD_SESSION_KILL,
-    METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_SEND, METHOD_SESSION_WAIT,
-    ReadResult, Request, SessionInfo,
+    METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_SEND, METHOD_SESSION_WAIT, ReadResult,
+    Request, SessionInfo,
 };
 use pasd::manager::Manager;
 use pasd::rpc::dispatch;
@@ -220,7 +220,10 @@ async fn rename_account_works_and_validates() {
 
     let empty = dispatch(
         &mgr,
-        req(METHOD_ACCOUNT_RENAME, json!({ "id": acc.id, "name": "   " })),
+        req(
+            METHOD_ACCOUNT_RENAME,
+            json!({ "id": acc.id, "name": "   " }),
+        ),
     )
     .await;
     assert_eq!(empty.error.unwrap().code, ERR_INVALID_PARAMS);
@@ -575,8 +578,14 @@ async fn session_env_has_config_dir_and_session_id() {
             .account_id
             .clone()
     };
-    assert_eq!(find_acc(&s_claude.id).as_deref(), Some(claude_acc.id.as_str()));
-    assert_eq!(find_acc(&s_codex.id).as_deref(), Some(codex_acc.id.as_str()));
+    assert_eq!(
+        find_acc(&s_claude.id).as_deref(),
+        Some(claude_acc.id.as_str())
+    );
+    assert_eq!(
+        find_acc(&s_codex.id).as_deref(),
+        Some(codex_acc.id.as_str())
+    );
     assert_eq!(find_acc(&s_agy.id).as_deref(), Some(agy_acc.id.as_str()));
 
     dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": s_claude.id }))).await;

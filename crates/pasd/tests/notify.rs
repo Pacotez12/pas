@@ -104,14 +104,7 @@ async fn one_notification_per_waiting_transition() {
     let dir = tempdir().unwrap();
     let notifier = Arc::new(FakeNotifier::default());
     let store = Store::open_in_memory().unwrap();
-    let mgr = Manager::with_config(
-        150,
-        store,
-        None,
-        None,
-        Config::default(),
-        notifier.clone(),
-    );
+    let mgr = Manager::with_config(150, store, None, None, Config::default(), notifier.clone());
 
     let mut events_rx = mgr.subscribe_events();
 

@@ -65,7 +65,10 @@ fn remote_key_normalizes() {
 #[tokio::test]
 async fn add_list_remove() {
     let tmp = tempdir().unwrap();
-    let repo = init_git_repo(&tmp.path().join("mi-app"), Some("git@github.com:org/mi-app.git"));
+    let repo = init_git_repo(
+        &tmp.path().join("mi-app"),
+        Some("git@github.com:org/mi-app.git"),
+    );
     let db = tmp.path().join("data").join("pas.db");
     let mgr = Manager::with_store(200, Store::open(&db).unwrap());
 
@@ -100,7 +103,9 @@ async fn add_twice_same_path_is_error() {
     assert!(r1.error.is_none(), "primer add falló: {:?}", r1.error);
 
     let r2 = dispatch(&mgr, req(METHOD_PROJECT_ADD, json!({ "path": repo }))).await;
-    let err = r2.error.expect("debería fallar al agregar la misma ruta dos veces");
+    let err = r2
+        .error
+        .expect("debería fallar al agregar la misma ruta dos veces");
     assert_eq!(err.code, ERR_PROJECT_ALREADY_EXISTS);
 }
 
@@ -161,14 +166,23 @@ async fn survives_restart() {
     let groups: Vec<GroupInfo> = serde_json::from_value(r.result.unwrap()).unwrap();
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].id, group_id);
-    assert_eq!(groups[0].remote_key.as_deref(), Some("github.com/org/persistente"));
+    assert_eq!(
+        groups[0].remote_key.as_deref(),
+        Some("github.com/org/persistente")
+    );
 }
 
 #[tokio::test]
 async fn same_remote_same_group() {
     let tmp = tempdir().unwrap();
-    let clone_ssh = init_git_repo(&tmp.path().join("clone-a"), Some("git@github.com:Org/App.git"));
-    let clone_https = init_git_repo(&tmp.path().join("clone-b"), Some("https://github.com/org/app"));
+    let clone_ssh = init_git_repo(
+        &tmp.path().join("clone-a"),
+        Some("git@github.com:Org/App.git"),
+    );
+    let clone_https = init_git_repo(
+        &tmp.path().join("clone-b"),
+        Some("https://github.com/org/app"),
+    );
     let mgr = Manager::new(200);
 
     let p1: ProjectInfo = serde_json::from_value(
@@ -179,10 +193,13 @@ async fn same_remote_same_group() {
     )
     .unwrap();
     let p2: ProjectInfo = serde_json::from_value(
-        dispatch(&mgr, req(METHOD_PROJECT_ADD, json!({ "path": clone_https })))
-            .await
-            .result
-            .unwrap(),
+        dispatch(
+            &mgr,
+            req(METHOD_PROJECT_ADD, json!({ "path": clone_https })),
+        )
+        .await
+        .result
+        .unwrap(),
     )
     .unwrap();
 
@@ -204,7 +221,10 @@ async fn same_remote_same_group() {
 async fn move_pins_project() {
     let tmp = tempdir().unwrap();
     let clone1 = init_git_repo(&tmp.path().join("c1"), Some("git@github.com:org/srv.git"));
-    let clone2 = init_git_repo(&tmp.path().join("c2"), Some("https://github.com/org/srv.git"));
+    let clone2 = init_git_repo(
+        &tmp.path().join("c2"),
+        Some("https://github.com/org/srv.git"),
+    );
     let mgr = Manager::new(200);
 
     let p1: ProjectInfo = serde_json::from_value(
@@ -333,7 +353,10 @@ async fn unpin_returns_to_remote_group() {
 #[tokio::test]
 async fn empty_group_is_deleted() {
     let tmp = tempdir().unwrap();
-    let repo = init_git_repo(&tmp.path().join("solo"), Some("git@github.com:org/solo.git"));
+    let repo = init_git_repo(
+        &tmp.path().join("solo"),
+        Some("git@github.com:org/solo.git"),
+    );
     let mgr = Manager::new(200);
 
     let p: ProjectInfo = serde_json::from_value(

@@ -63,6 +63,59 @@ fn create_params_defaults() {
     assert!(params.env.is_empty());
     assert_eq!(params.title, None);
     assert_eq!(params.project_id, None);
+    assert_eq!(params.mode, pas_core::protocol::Mode::Terminal);
+}
+
+#[test]
+fn chat_types_roundtrip() {
+    use pas_core::protocol::{ChatEvent, ChatEventNotification, Mode, PermissionChoice};
+
+    let create: CreateParams =
+        serde_json::from_str(r#"{"command":["claude"],"cwd":"/tmp","mode":"chat"}"#).unwrap();
+    assert_eq!(create.mode, Mode::Chat);
+
+    let events = vec![
+        ChatEvent::UserMessage {
+            text: "hola".into(),
+        },
+        ChatEvent::AgentChunk {
+            text: "mundo".into(),
+        },
+        ChatEvent::AgentMessageEnd,
+        ChatEvent::ToolCall {
+            id: "tc-1".into(),
+            title: "Leyó archivo".into(),
+            status: "completed".into(),
+        },
+        ChatEvent::Diff {
+            path: "src/lib.rs".into(),
+            unified: "--- a/src/lib.rs\n+++ b/src/lib.rs\n".into(),
+        },
+        ChatEvent::PermissionRequest {
+            request_id: "p1".into(),
+            title: "Ejecutar".into(),
+            detail: Some("cargo test".into()),
+        },
+        ChatEvent::PermissionResolved {
+            request_id: "p1".into(),
+            choice: PermissionChoice::AllowSession,
+        },
+        ChatEvent::Visual {
+            file: "mockup.html".into(),
+        },
+        ChatEvent::Error {
+            message: "falló".into(),
+        },
+    ];
+    for ev in events {
+        let notif = ChatEventNotification {
+            id: "s1".into(),
+            event: ev,
+        };
+        let raw = serde_json::to_string(&notif).unwrap();
+        let parsed: ChatEventNotification = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed, notif);
+    }
 }
 
 #[test]
@@ -188,6 +241,7 @@ fn stage2_types_roundtrip() {
         created_at: 123,
         project_id: Some("p1".into()),
         account_id: None,
+        mode: pas_core::protocol::Mode::Terminal,
     };
     assert_eq!(
         serde_json::from_str::<SessionInfo>(&serde_json::to_string(&info).unwrap()).unwrap(),

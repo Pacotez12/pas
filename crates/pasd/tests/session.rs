@@ -42,6 +42,7 @@ fn params_for(cmd: Vec<String>) -> CreateParams {
         rows: 40,
         project_id: None,
         account_id: None,
+        mode: pas_core::protocol::Mode::Terminal,
     }
 }
 
@@ -50,7 +51,10 @@ async fn spawn_and_read_banner() {
     let bin = fake_agent_bin().to_string_lossy().into_owned();
     let s = Session::spawn("s1".into(), params_for(vec![bin]), 200).unwrap();
 
-    let st = s.wait(WaitUntil::Idle, Duration::from_secs(5)).await.unwrap();
+    let st = s
+        .wait(WaitUntil::Idle, Duration::from_secs(5))
+        .await
+        .unwrap();
     assert_eq!(st, SessionState::Idle);
     assert!(s.read(None).contains("fake-agent listo"));
     s.kill();
@@ -60,10 +64,14 @@ async fn spawn_and_read_banner() {
 async fn send_echo_utf8() {
     let bin = fake_agent_bin().to_string_lossy().into_owned();
     let s = Session::spawn("s2".into(), params_for(vec![bin]), 200).unwrap();
-    s.wait(WaitUntil::Idle, Duration::from_secs(5)).await.unwrap();
+    s.wait(WaitUntil::Idle, Duration::from_secs(5))
+        .await
+        .unwrap();
 
     s.send("echo canción ñandú", true).unwrap();
-    s.wait(WaitUntil::Idle, Duration::from_secs(5)).await.unwrap();
+    s.wait(WaitUntil::Idle, Duration::from_secs(5))
+        .await
+        .unwrap();
 
     let out = s.read(Some(3));
     assert!(out.contains("canción ñandú"), "salida inesperada: {out:?}");
@@ -74,7 +82,9 @@ async fn send_echo_utf8() {
 async fn exit_code_reported() {
     let bin = fake_agent_bin().to_string_lossy().into_owned();
     let s = Session::spawn("s3".into(), params_for(vec![bin]), 200).unwrap();
-    s.wait(WaitUntil::Idle, Duration::from_secs(5)).await.unwrap();
+    s.wait(WaitUntil::Idle, Duration::from_secs(5))
+        .await
+        .unwrap();
 
     s.send("exit 3", true).unwrap();
     let st = s
@@ -101,10 +111,14 @@ async fn spawn_missing_command() {
 async fn flood_is_bounded() {
     let bin = fake_agent_bin().to_string_lossy().into_owned();
     let s = Session::spawn("s5".into(), params_for(vec![bin]), 200).unwrap();
-    s.wait(WaitUntil::Idle, Duration::from_secs(5)).await.unwrap();
+    s.wait(WaitUntil::Idle, Duration::from_secs(5))
+        .await
+        .unwrap();
 
     s.send("flood 200000", true).unwrap();
-    s.wait(WaitUntil::Idle, Duration::from_secs(60)).await.unwrap();
+    s.wait(WaitUntil::Idle, Duration::from_secs(60))
+        .await
+        .unwrap();
 
     let t0 = Instant::now();
     let out = s.read(Some(5));
@@ -118,7 +132,9 @@ async fn flood_is_bounded() {
 async fn wait_timeout() {
     let bin = fake_agent_bin().to_string_lossy().into_owned();
     let s = Session::spawn("s6".into(), params_for(vec![bin]), 200).unwrap();
-    s.wait(WaitUntil::Idle, Duration::from_secs(5)).await.unwrap();
+    s.wait(WaitUntil::Idle, Duration::from_secs(5))
+        .await
+        .unwrap();
 
     s.send("sleep 3000", true).unwrap();
     let err = s
@@ -155,7 +171,9 @@ async fn strips_inherited_agent_env_but_keeps_explicit() {
         .insert("CLAUDE_CODE_EXPLICIT".into(), "respetada".into());
 
     let s = Session::spawn("s7".into(), params, 200).unwrap();
-    s.wait(WaitUntil::Idle, Duration::from_secs(5)).await.unwrap();
+    s.wait(WaitUntil::Idle, Duration::from_secs(5))
+        .await
+        .unwrap();
 
     for (var, expected) in [
         ("CLAUDECODE", "(vacío)"),
@@ -164,7 +182,9 @@ async fn strips_inherited_agent_env_but_keeps_explicit() {
         ("CLAUDE_CODE_EXPLICIT", "respetada"),
     ] {
         s.send(&format!("env {var}"), true).unwrap();
-        s.wait(WaitUntil::Idle, Duration::from_secs(5)).await.unwrap();
+        s.wait(WaitUntil::Idle, Duration::from_secs(5))
+            .await
+            .unwrap();
         let out = s.read(Some(3));
         assert!(
             out.contains(expected),

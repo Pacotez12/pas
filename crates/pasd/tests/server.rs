@@ -202,7 +202,9 @@ async fn client_drop_mid_request() {
 
     {
         let mut raw = UnixStream::connect(&sock).await.unwrap();
-        raw.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"meth").await.unwrap();
+        raw.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"meth")
+            .await
+            .unwrap();
         raw.flush().await.unwrap();
     }
 

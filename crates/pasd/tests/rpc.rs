@@ -139,7 +139,10 @@ async fn get_by_title() {
 
     let r = dispatch(
         &mgr,
-        req(METHOD_SESSION_SEND, json!({ "id": "a", "text": "echo ping" })),
+        req(
+            METHOD_SESSION_SEND,
+            json!({ "id": "a", "text": "echo ping" }),
+        ),
     )
     .await;
     assert!(r.error.is_none());
@@ -153,7 +156,11 @@ async fn get_by_title() {
     )
     .await;
 
-    let r = dispatch(&mgr, req(METHOD_SESSION_READ, json!({ "id": "a", "lines": 3 }))).await;
+    let r = dispatch(
+        &mgr,
+        req(METHOD_SESSION_READ, json!({ "id": "a", "lines": 3 })),
+    )
+    .await;
     let read: ReadResult = serde_json::from_value(r.result.unwrap()).unwrap();
     assert!(read.text.contains("ping"), "salida: {:?}", read.text);
 
@@ -175,7 +182,10 @@ async fn send_to_exited() {
 
     dispatch(
         &mgr,
-        req(METHOD_SESSION_SEND, json!({ "id": "bye", "text": "exit 0" })),
+        req(
+            METHOD_SESSION_SEND,
+            json!({ "id": "bye", "text": "exit 0" }),
+        ),
     )
     .await;
     dispatch(
@@ -233,7 +243,11 @@ async fn session_remove_exited_ok() {
     )
     .await;
 
-    let r = dispatch(&mgr, req(METHOD_SESSION_REMOVE, json!({ "id": created.id }))).await;
+    let r = dispatch(
+        &mgr,
+        req(METHOD_SESSION_REMOVE, json!({ "id": created.id })),
+    )
+    .await;
     assert!(r.error.is_none(), "error inesperado: {:?}", r.error);
 
     let list: Vec<SessionInfo> = serde_json::from_value(
@@ -268,8 +282,14 @@ async fn session_remove_running_is_error() {
     )
     .unwrap();
 
-    let r = dispatch(&mgr, req(METHOD_SESSION_REMOVE, json!({ "id": created.id }))).await;
-    let err = r.error.expect("debería fallar si la sesión sigue corriendo");
+    let r = dispatch(
+        &mgr,
+        req(METHOD_SESSION_REMOVE, json!({ "id": created.id })),
+    )
+    .await;
+    let err = r
+        .error
+        .expect("debería fallar si la sesión sigue corriendo");
     assert_eq!(err.code, ERR_SESSION_RUNNING);
     assert_eq!(
         err.message,

@@ -97,17 +97,9 @@ impl QuotaTracker {
             .remove(account_id);
     }
 
-    pub fn poll_codex_account(
-        &self,
-        account_id: &str,
-        codex_home: &Path,
-        now: i64,
-    ) -> QuotaUpdate {
+    pub fn poll_codex_account(&self, account_id: &str, codex_home: &Path, now: i64) -> QuotaUpdate {
         let parsed = {
-            let mut caches = self
-                .codex_caches
-                .lock()
-                .expect("codex cache lock poisoned");
+            let mut caches = self.codex_caches.lock().expect("codex cache lock poisoned");
             let cache = caches.entry(account_id.to_string()).or_default();
             read_codex_quota_cached(codex_home, cache, now).quota
         };
@@ -142,10 +134,9 @@ impl QuotaTracker {
             };
             let key = (account_id.to_string(), kind);
             if win.used_percent >= warn_percent {
-                let already_warned = state
-                    .warned
-                    .get(&key)
-                    .is_some_and(|&prev_reset| (win.resets_at - prev_reset).abs() <= WINDOW_JITTER_SECS);
+                let already_warned = state.warned.get(&key).is_some_and(|&prev_reset| {
+                    (win.resets_at - prev_reset).abs() <= WINDOW_JITTER_SECS
+                });
                 if !already_warned {
                     state.warned.insert(key, win.resets_at);
                     warnings.push(QuotaWarningEvent {
@@ -462,6 +453,9 @@ fn json_f32(val: &Value) -> Option<f32> {
 }
 
 fn json_i64(val: &Value) -> Option<i64> {
-    val.as_i64()
-        .or_else(|| val.as_f64().filter(|v| v.is_finite()).map(|v| v.round() as i64))
+    val.as_i64().or_else(|| {
+        val.as_f64()
+            .filter(|v| v.is_finite())
+            .map(|v| v.round() as i64)
+    })
 }

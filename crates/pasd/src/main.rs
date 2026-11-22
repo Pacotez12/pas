@@ -32,9 +32,7 @@ fn default_data_dir() -> Result<PathBuf, String> {
     if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(home).join(".local").join("share").join("pas"));
     }
-    Err(
-        "No se encontró HOME ni XDG_DATA_HOME. Pasá --data-dir con la carpeta de datos.".into(),
-    )
+    Err("No se encontró HOME ni XDG_DATA_HOME. Pasá --data-dir con la carpeta de datos.".into())
 }
 
 #[tokio::main]

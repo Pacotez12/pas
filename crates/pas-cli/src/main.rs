@@ -138,6 +138,7 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
                         rows: 40,
                         project_id: None,
                         account_id: None,
+                        mode: pas_core::protocol::Mode::Terminal,
                     },
                 )
                 .await?;

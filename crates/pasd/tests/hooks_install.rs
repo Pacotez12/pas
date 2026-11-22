@@ -262,7 +262,10 @@ async fn install_then_uninstall_is_identity() {
 
     let r = dispatch(
         &mgr,
-        req(METHOD_ACCOUNT_UNINSTALL_HOOKS, json!({ "id": claude_acc.id })),
+        req(
+            METHOD_ACCOUNT_UNINSTALL_HOOKS,
+            json!({ "id": claude_acc.id }),
+        ),
     )
     .await;
     assert!(r.error.is_none(), "uninstall claude falló: {:?}", r.error);
@@ -291,7 +294,10 @@ async fn install_then_uninstall_is_identity() {
     assert!(r.error.is_none(), "install codex falló: {:?}", r.error);
     let r = dispatch(
         &mgr,
-        req(METHOD_ACCOUNT_UNINSTALL_HOOKS, json!({ "id": codex_acc.id })),
+        req(
+            METHOD_ACCOUNT_UNINSTALL_HOOKS,
+            json!({ "id": codex_acc.id }),
+        ),
     )
     .await;
     assert!(r.error.is_none(), "uninstall codex falló: {:?}", r.error);
@@ -345,23 +351,28 @@ async fn install_then_uninstall_is_identity() {
     .await;
     assert!(r.error.is_none());
 
-    let mut edited: Value =
-        serde_json::from_slice(&fs::read(&claude_settings).unwrap()).unwrap();
+    let mut edited: Value = serde_json::from_slice(&fs::read(&claude_settings).unwrap()).unwrap();
     edited
         .as_object_mut()
         .unwrap()
         .insert("userCustomKey".into(), json!("mantener"));
-    fs::write(&claude_settings, serde_json::to_string_pretty(&edited).unwrap()).unwrap();
+    fs::write(
+        &claude_settings,
+        serde_json::to_string_pretty(&edited).unwrap(),
+    )
+    .unwrap();
 
     let r = dispatch(
         &mgr,
-        req(METHOD_ACCOUNT_UNINSTALL_HOOKS, json!({ "id": claude_acc.id })),
+        req(
+            METHOD_ACCOUNT_UNINSTALL_HOOKS,
+            json!({ "id": claude_acc.id }),
+        ),
     )
     .await;
     assert!(r.error.is_none());
 
-    let after_edit: Value =
-        serde_json::from_slice(&fs::read(&claude_settings).unwrap()).unwrap();
+    let after_edit: Value = serde_json::from_slice(&fs::read(&claude_settings).unwrap()).unwrap();
     assert_eq!(after_edit["userCustomKey"], "mantener");
     assert_eq!(
         after_edit["statusLine"]["command"],
@@ -403,7 +414,11 @@ async fn install_keeps_foreign_hooks() {
     assert!(r.error.is_none(), "install claude falló: {:?}", r.error);
 
     let claude_backups = list_backups(&claude_dir, "settings.json");
-    assert_eq!(claude_backups.len(), 1, "debe crear backup *.bak-pas-AAAAMMDD");
+    assert_eq!(
+        claude_backups.len(),
+        1,
+        "debe crear backup *.bak-pas-AAAAMMDD"
+    );
     assert_eq!(
         fs::read(&claude_backups[0]).unwrap(),
         CLAUDE_SETTINGS_FIXTURE.as_bytes()
@@ -422,7 +437,11 @@ async fn install_keeps_foreign_hooks() {
     let session_start = val["hooks"]["SessionStart"].to_string();
     assert!(session_start.contains("herdr-agent-state.sh"));
     let ups = val["hooks"]["UserPromptSubmit"].as_array().unwrap();
-    assert_eq!(ups.len(), 2, "debe mantener orca y sumar pas en UserPromptSubmit");
+    assert_eq!(
+        ups.len(),
+        2,
+        "debe mantener orca y sumar pas en UserPromptSubmit"
+    );
     assert!(ups[0].to_string().contains("ORCA_PANE_KEY"));
     assert!(ups[1].to_string().contains(" hook claude UserPromptSubmit"));
     for ev in [
@@ -455,14 +474,25 @@ async fn install_keeps_foreign_hooks() {
     assert_eq!(list_backups(&codex_dir, "hooks.json").len(), 1);
 
     let cval: Value = serde_json::from_slice(&fs::read(&codex_hooks).unwrap()).unwrap();
-    assert!(cval["hooks"]["SessionStart"].to_string().contains("orca-agent-hook-form=2"));
-    assert_eq!(cval["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 2);
+    assert!(
+        cval["hooks"]["SessionStart"]
+            .to_string()
+            .contains("orca-agent-hook-form=2")
+    );
+    assert_eq!(
+        cval["hooks"]["UserPromptSubmit"].as_array().unwrap().len(),
+        2
+    );
     assert!(
         cval["hooks"]["PermissionRequest"]
             .to_string()
             .contains(" hook codex permission_request")
     );
-    assert!(cval["hooks"]["Stop"].to_string().contains(" hook codex stop"));
+    assert!(
+        cval["hooks"]["Stop"]
+            .to_string()
+            .contains(" hook codex stop")
+    );
 
     // agy
     let agy_dir = tmp.path().join("agy-foreign");
@@ -563,7 +593,10 @@ async fn install_is_idempotent() {
     );
 
     let val: Value = serde_json::from_slice(&after_second).unwrap();
-    assert_eq!(val["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        val["hooks"]["UserPromptSubmit"].as_array().unwrap().len(),
+        2
+    );
     let sl = val["statusLine"]["command"].as_str().unwrap();
     assert_eq!(
         sl.matches("statusline --agent claude --").count(),
@@ -574,7 +607,10 @@ async fn install_is_idempotent() {
     // Y quitar después de dos instalaciones sigue devolviendo el archivo original byte a byte.
     let r3 = dispatch(
         &mgr,
-        req(METHOD_ACCOUNT_UNINSTALL_HOOKS, json!({ "id": claude_acc.id })),
+        req(
+            METHOD_ACCOUNT_UNINSTALL_HOOKS,
+            json!({ "id": claude_acc.id }),
+        ),
     )
     .await;
     assert!(r3.error.is_none());
@@ -608,7 +644,9 @@ async fn invalid_json_untouched() {
     assert_eq!(err.code, ERR_HOOKS_CONFIG_INVALID);
     assert!(
         err.message.contains("no es JSON válido")
-            && err.message.contains("Corregilo o restauralo desde su backup"),
+            && err
+                .message
+                .contains("Corregilo o restauralo desde su backup"),
         "mensaje esperado en voseo: {}",
         err.message
     );
@@ -637,7 +675,9 @@ async fn invalid_json_untouched() {
         req(METHOD_ACCOUNT_INSTALL_HOOKS, json!({ "id": agy_acc.id })),
     )
     .await;
-    let err = r.error.expect("debe fallar si settings.json de agy es inválido");
+    let err = r
+        .error
+        .expect("debe fallar si settings.json de agy es inválido");
     assert_eq!(err.code, ERR_HOOKS_CONFIG_INVALID);
     assert_eq!(
         fs::read(&agy_hooks).unwrap(),

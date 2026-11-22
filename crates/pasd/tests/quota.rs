@@ -30,19 +30,32 @@ fn drain_events(rx: &mut broadcast::Receiver<Notification>) -> Vec<Notification>
     out
 }
 
-async fn add_account(mgr: &Manager, agent: &str, name: &str, config_dir: Option<&std::path::Path>) -> AccountInfo {
+async fn add_account(
+    mgr: &Manager,
+    agent: &str,
+    name: &str,
+    config_dir: Option<&std::path::Path>,
+) -> AccountInfo {
     let params = match config_dir {
         Some(dir) => json!({ "agent": agent, "name": name, "config_dir": dir }),
         None => json!({ "agent": agent, "name": name }),
     };
     let resp = dispatch(mgr, req(METHOD_ACCOUNT_ADD, params)).await;
-    assert!(resp.error.is_none(), "error creando cuenta: {:?}", resp.error);
+    assert!(
+        resp.error.is_none(),
+        "error creando cuenta: {:?}",
+        resp.error
+    );
     serde_json::from_value(resp.result.unwrap()).unwrap()
 }
 
 async fn list_quotas(mgr: &Manager) -> Vec<AccountQuota> {
     let resp = dispatch(mgr, req(METHOD_QUOTA_LIST, json!({}))).await;
-    assert!(resp.error.is_none(), "error en quota.list: {:?}", resp.error);
+    assert!(
+        resp.error.is_none(),
+        "error en quota.list: {:?}",
+        resp.error
+    );
     serde_json::from_value(resp.result.unwrap()).unwrap()
 }
 
@@ -90,7 +103,10 @@ async fn codex_rollout_parsed() {
     let list = list_quotas(&mgr).await;
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].account_id, acc.id);
-    let q = list[0].quota.as_ref().expect("debería haber cuota de Codex");
+    let q = list[0]
+        .quota
+        .as_ref()
+        .expect("debería haber cuota de Codex");
     let five_h = q.five_h.as_ref().expect("debería tener ventana 5h");
     let week = q.week.as_ref().expect("debería tener ventana 7d");
     assert!((five_h.used_percent - 42.5).abs() < 0.01);
@@ -158,7 +174,10 @@ async fn claude_report_parsed() {
 
     let list = list_quotas(&mgr).await;
     assert_eq!(list.len(), 1);
-    let q = list[0].quota.as_ref().expect("debería haber cuota de Claude");
+    let q = list[0]
+        .quota
+        .as_ref()
+        .expect("debería haber cuota de Claude");
     let five_h = q.five_h.as_ref().expect("ventana 5h");
     let week = q.week.as_ref().expect("ventana 7d");
     assert!((five_h.used_percent - 37.5).abs() < 0.01);
@@ -429,7 +448,18 @@ async fn report_resolves_account_from_session_id() {
     let q1 = list.iter().find(|q| q.account_id == acc1.id).unwrap();
     let q2 = list.iter().find(|q| q.account_id == acc2.id).unwrap();
     assert!(q1.quota.is_none());
-    assert!((q2.quota.as_ref().unwrap().five_h.as_ref().unwrap().used_percent - 55.0).abs() < 0.01);
+    assert!(
+        (q2.quota
+            .as_ref()
+            .unwrap()
+            .five_h
+            .as_ref()
+            .unwrap()
+            .used_percent
+            - 55.0)
+            .abs()
+            < 0.01
+    );
 
     let _ = dispatch(
         &mgr,
@@ -443,8 +473,8 @@ async fn report_resolves_account_from_session_id() {
 
 #[test]
 fn codex_reads_only_tail() {
-    use std::io::Write;
     use pasd::quota::read_codex_quota;
+    use std::io::Write;
 
     let tmp = tempdir().unwrap();
     let codex_home = tmp.path().join("codex-tail");
@@ -503,9 +533,9 @@ fn codex_reads_only_tail() {
 
 #[test]
 fn codex_skips_unchanged_file() {
+    use pasd::quota::{CodexScanCache, read_codex_quota_cached};
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
-    use pasd::quota::{CodexScanCache, read_codex_quota_cached};
 
     let tmp = tempdir().unwrap();
     let codex_home = tmp.path().join("codex-cache");
@@ -524,7 +554,19 @@ fn codex_skips_unchanged_file() {
     let mut cache = CodexScanCache::default();
     let first = read_codex_quota_cached(&codex_home, &mut cache, 1795360000);
     assert_eq!(first.files_read, 1);
-    assert!((first.quota.as_ref().unwrap().five_h.as_ref().unwrap().used_percent - 30.0).abs() < 0.01);
+    assert!(
+        (first
+            .quota
+            .as_ref()
+            .unwrap()
+            .five_h
+            .as_ref()
+            .unwrap()
+            .used_percent
+            - 30.0)
+            .abs()
+            < 0.01
+    );
 
     // Quitar permiso de lectura sin cambiar mtime ni tamaño: si intentara abrir el archivo fallaría.
     fs::set_permissions(&rollout, fs::Permissions::from_mode(0o000)).unwrap();
@@ -535,7 +577,19 @@ fn codex_skips_unchanged_file() {
         second.files_read, 0,
         "no debería releer el archivo si mtime y tamaño no cambiaron"
     );
-    assert!((second.quota.as_ref().unwrap().five_h.as_ref().unwrap().used_percent - 30.0).abs() < 0.01);
+    assert!(
+        (second
+            .quota
+            .as_ref()
+            .unwrap()
+            .five_h
+            .as_ref()
+            .unwrap()
+            .used_percent
+            - 30.0)
+            .abs()
+            < 0.01
+    );
 
     // Al agregar una línea nueva (cambia tamaño/mtime), sí relee y actualiza.
     std::thread::sleep(Duration::from_millis(20));
@@ -549,5 +603,17 @@ fn codex_skips_unchanged_file() {
     }
     let third = read_codex_quota_cached(&codex_home, &mut cache, 1795360120);
     assert_eq!(third.files_read, 1);
-    assert!((third.quota.as_ref().unwrap().five_h.as_ref().unwrap().used_percent - 48.0).abs() < 0.01);
+    assert!(
+        (third
+            .quota
+            .as_ref()
+            .unwrap()
+            .five_h
+            .as_ref()
+            .unwrap()
+            .used_percent
+            - 48.0)
+            .abs()
+            < 0.01
+    );
 }

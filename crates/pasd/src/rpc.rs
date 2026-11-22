@@ -3,23 +3,23 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use pas_core::protocol::{
-    AccountAddParams, AccountRemoveParams, AccountRenameParams, ClaudeConversationsParams,
-    CreateParams, CreateResult, ERR_ACCOUNT_ALREADY_EXISTS, ERR_ACCOUNT_DIR_INVALID,
-    ERR_ACCOUNT_NOT_FOUND, ERR_GROUP_ALREADY_EXISTS, ERR_GROUP_NOT_FOUND,
-    ERR_HOOKS_CONFIG_INVALID, ERR_INVALID_PARAMS, ERR_METHOD_NOT_FOUND, ERR_NOT_A_GIT_REPO,
-    ERR_PROJECT_ALREADY_EXISTS, ERR_PROJECT_NOT_FOUND, GroupCreateParams, GroupRenameParams,
-    HookParams, IdParams, InputParams, METHOD_ACCOUNT_ADD, METHOD_ACCOUNT_INSTALL_HOOKS,
-    METHOD_ACCOUNT_LIST, METHOD_ACCOUNT_REMOVE, METHOD_ACCOUNT_RENAME,
-    METHOD_ACCOUNT_UNINSTALL_HOOKS, METHOD_CLAUDE_CONVERSATIONS, METHOD_DAEMON_PING,
+    AccountAddParams, AccountRemoveParams, AccountRenameParams, ChatPermissionParams,
+    ChatPromptParams, ClaudeConversationsParams, CreateParams, CreateResult,
+    ERR_ACCOUNT_ALREADY_EXISTS, ERR_ACCOUNT_DIR_INVALID, ERR_ACCOUNT_NOT_FOUND,
+    ERR_GROUP_ALREADY_EXISTS, ERR_GROUP_NOT_FOUND, ERR_HOOKS_CONFIG_INVALID, ERR_INVALID_PARAMS,
+    ERR_METHOD_NOT_FOUND, ERR_NOT_A_GIT_REPO, ERR_PROJECT_ALREADY_EXISTS, ERR_PROJECT_NOT_FOUND,
+    GroupCreateParams, GroupRenameParams, HookParams, IdParams, InputParams, METHOD_ACCOUNT_ADD,
+    METHOD_ACCOUNT_INSTALL_HOOKS, METHOD_ACCOUNT_LIST, METHOD_ACCOUNT_REMOVE,
+    METHOD_ACCOUNT_RENAME, METHOD_ACCOUNT_UNINSTALL_HOOKS, METHOD_CHAT_CANCEL, METHOD_CHAT_HISTORY,
+    METHOD_CHAT_PERMISSION, METHOD_CHAT_PROMPT, METHOD_CLAUDE_CONVERSATIONS, METHOD_DAEMON_PING,
     METHOD_GROUP_CREATE, METHOD_GROUP_LIST, METHOD_GROUP_RENAME, METHOD_PROJECT_ADD,
     METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE, METHOD_PROJECT_REMOVE, METHOD_PROJECT_RENAME,
     METHOD_PROJECT_UNPIN, METHOD_QUOTA_LIST, METHOD_QUOTA_REPORT, METHOD_SESSION_CREATE,
-    METHOD_SESSION_HOOK,
-    METHOD_SESSION_INPUT, METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_READ,
-    METHOD_SESSION_REMOVE, METHOD_SESSION_RESIZE, METHOD_SESSION_SEND, METHOD_SESSION_SNAPSHOT,
-    METHOD_SESSION_WAIT, PingResult, ProjectAddParams, ProjectMoveParams, ProjectRenameParams,
-    QuotaReportParams, ReadParams, ReadResult, Request, ResizeParams, Response, RpcError,
-    SendParams, SnapshotResult, WaitParams,
+    METHOD_SESSION_HOOK, METHOD_SESSION_INPUT, METHOD_SESSION_KILL, METHOD_SESSION_LIST,
+    METHOD_SESSION_READ, METHOD_SESSION_REMOVE, METHOD_SESSION_RESIZE, METHOD_SESSION_SEND,
+    METHOD_SESSION_SNAPSHOT, METHOD_SESSION_WAIT, PingResult, ProjectAddParams, ProjectMoveParams,
+    ProjectRenameParams, QuotaReportParams, ReadParams, ReadResult, Request, ResizeParams,
+    Response, RpcError, SendParams, SnapshotResult, WaitParams,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -242,6 +242,34 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
         METHOD_QUOTA_LIST => {
             let list = mgr.list_quotas().map_err(store_error_to_rpc)?;
             ok_json(list)
+        }
+        METHOD_CHAT_PROMPT => {
+            let params: ChatPromptParams = parse_params(req.params)?;
+            let session = mgr.get(&params.id)?;
+            session
+                .chat_prompt(params.text)
+                .map_err(session_error_to_rpc)?;
+            Ok(json!({}))
+        }
+        METHOD_CHAT_PERMISSION => {
+            let params: ChatPermissionParams = parse_params(req.params)?;
+            let session = mgr.get(&params.id)?;
+            session
+                .chat_permission(&params.request_id, params.choice)
+                .map_err(session_error_to_rpc)?;
+            Ok(json!({}))
+        }
+        METHOD_CHAT_CANCEL => {
+            let params: IdParams = parse_params(req.params)?;
+            let session = mgr.get(&params.id)?;
+            session.chat_cancel().map_err(session_error_to_rpc)?;
+            Ok(json!({}))
+        }
+        METHOD_CHAT_HISTORY => {
+            let params: IdParams = parse_params(req.params)?;
+            let session = mgr.get(&params.id)?;
+            let events = session.chat_history().map_err(session_error_to_rpc)?;
+            ok_json(events)
         }
         other => Err(RpcError {
             code: ERR_METHOD_NOT_FOUND,

@@ -93,7 +93,12 @@ impl Config {
         }
         std::env::var_os("HOME")
             .filter(|v| !v.is_empty())
-            .map(|home| PathBuf::from(home).join(".config").join("pas").join("config.toml"))
+            .map(|home| {
+                PathBuf::from(home)
+                    .join(".config")
+                    .join("pas")
+                    .join("config.toml")
+            })
     }
 
     pub fn load_default() -> Result<Self, ConfigError> {

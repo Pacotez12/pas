@@ -1,17 +1,22 @@
 use std::fmt;
 use std::io::{Read, Write};
 use std::num::NonZeroU16;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
-use pas_core::protocol::{AgentKind, CreateParams, SessionInfo, SessionState, WaitUntil};
+use pas_core::protocol::{
+    AgentKind, ChatEvent, CreateParams, Mode, Notification, PermissionChoice, SessionInfo,
+    SessionState, WaitUntil,
+};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use regex::Regex;
 use tokio::sync::{broadcast, watch};
+
+use crate::chat::ChatSession;
 
 const SCROLLBACK_LINES: usize = 10_000;
 const OUTPUT_BROADCAST_CAPACITY: usize = 1024;
@@ -34,8 +39,40 @@ pub enum SessionError {
     #[error("El tamaño de la terminal tiene que ser mayor a cero. Pasá columnas y filas válidas.")]
     InvalidSize,
 
+    #[error("La sesión {title} no es de tipo {expected}. Usá el método que corresponde a su modo.")]
+    WrongMode {
+        title: String,
+        expected: &'static str,
+    },
+
+    #[error(
+        "No hay ningún permiso pendiente con id {request_id}. Quizás ya se resolvió o se canceló."
+    )]
+    PermissionNotFound { request_id: String },
+
+    #[error(
+        "La sesión {title} ya está respondiendo. Esperá a que termine o cancelala antes de mandar otro mensaje."
+    )]
+    ChatBusy { title: String },
+
     #[error("{0}")]
     Io(#[from] std::io::Error),
+}
+
+struct TerminalSession {
+    parser: Arc<Mutex<vt100::Parser>>,
+    writer: Mutex<Box<dyn Write + Send>>,
+    master: Mutex<Box<dyn MasterPty + Send>>,
+    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    output_tx: broadcast::Sender<Bytes>,
+    started_at: Instant,
+    last_activity_ms: Arc<AtomicU64>,
+    hooks_active: AtomicBool,
+}
+
+enum SessionKind {
+    Terminal(TerminalSession),
+    Chat(ChatSession),
 }
 
 pub struct Session {
@@ -46,15 +83,9 @@ pub struct Session {
     created_at: u64,
     project_id: Option<String>,
     account_id: Option<String>,
-    parser: Arc<Mutex<vt100::Parser>>,
-    writer: Mutex<Box<dyn Write + Send>>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
-    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    mode: Mode,
     state_tx: watch::Sender<SessionState>,
-    output_tx: broadcast::Sender<Bytes>,
-    started_at: Instant,
-    last_activity_ms: Arc<AtomicU64>,
-    hooks_active: AtomicBool,
+    kind: SessionKind,
 }
 
 impl fmt::Debug for Session {
@@ -62,6 +93,7 @@ impl fmt::Debug for Session {
         f.debug_struct("Session")
             .field("id", &self.id)
             .field("title", &self.title)
+            .field("mode", &self.mode)
             .finish()
     }
 }
@@ -69,6 +101,43 @@ impl fmt::Debug for Session {
 impl Session {
     pub fn spawn(id: String, p: CreateParams, idle_ms: u64) -> Result<Arc<Self>, SessionError> {
         Self::spawn_with_waiting_patterns(id, p, idle_ms, Vec::new())
+    }
+
+    pub fn spawn_chat(
+        id: String,
+        p: CreateParams,
+        chats_dir: Option<&Path>,
+        events_tx: broadcast::Sender<Notification>,
+    ) -> Result<Arc<Self>, SessionError> {
+        let program = p.command.first().cloned().unwrap_or_default();
+        let title = p.title.clone().unwrap_or(program);
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let (state_tx, _) = watch::channel(SessionState::Running);
+
+        let chat = ChatSession::spawn(
+            id.clone(),
+            title.clone(),
+            &p,
+            chats_dir,
+            state_tx.clone(),
+            events_tx,
+        )?;
+
+        Ok(Arc::new(Self {
+            id,
+            title,
+            cwd: p.cwd,
+            command: p.command,
+            created_at,
+            project_id: p.project_id,
+            account_id: p.account_id,
+            mode: Mode::Chat,
+            state_tx,
+            kind: SessionKind::Chat(chat),
+        }))
     }
 
     pub fn spawn_with_waiting_patterns(
@@ -131,13 +200,10 @@ impl Session {
                 command: program.clone(),
                 cause: e.to_string(),
             })?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| SessionError::Spawn {
-                command: program.clone(),
-                cause: e.to_string(),
-            })?;
+        let writer = pair.master.take_writer().map_err(|e| SessionError::Spawn {
+            command: program.clone(),
+            cause: e.to_string(),
+        })?;
 
         let title = p.title.unwrap_or(program);
         let created_at = SystemTime::now()
@@ -214,9 +280,9 @@ impl Session {
                 let elapsed = now.saturating_sub(last);
                 if elapsed >= idle_ms {
                     let next_state = if !waiting_patterns.is_empty()
-                        && last_visible_line_from_parser(&w_parser)
-                            .is_some_and(|line| waiting_patterns.iter().any(|re| re.is_match(&line)))
-                    {
+                        && last_visible_line_from_parser(&w_parser).is_some_and(|line| {
+                            waiting_patterns.iter().any(|re| re.is_match(&line))
+                        }) {
                         SessionState::Waiting
                     } else {
                         SessionState::Idle
@@ -251,20 +317,50 @@ impl Session {
             created_at,
             project_id: p.project_id,
             account_id: p.account_id,
-            parser,
-            writer: Mutex::new(writer),
-            master: Mutex::new(pair.master),
-            killer: Mutex::new(killer),
+            mode: Mode::Terminal,
             state_tx,
-            output_tx,
-            started_at,
-            last_activity_ms,
-            hooks_active: AtomicBool::new(false),
+            kind: SessionKind::Terminal(TerminalSession {
+                parser,
+                writer: Mutex::new(writer),
+                master: Mutex::new(pair.master),
+                killer: Mutex::new(killer),
+                output_tx,
+                started_at,
+                last_activity_ms,
+                hooks_active: AtomicBool::new(false),
+            }),
         }))
     }
 
+    fn as_terminal(&self) -> Result<&TerminalSession, SessionError> {
+        match &self.kind {
+            SessionKind::Terminal(t) => Ok(t),
+            SessionKind::Chat(_) => Err(SessionError::WrongMode {
+                title: self.title.clone(),
+                expected: "terminal",
+            }),
+        }
+    }
+
+    fn as_chat(&self) -> Result<&ChatSession, SessionError> {
+        match &self.kind {
+            SessionKind::Chat(c) => Ok(c),
+            SessionKind::Terminal(_) => Err(SessionError::WrongMode {
+                title: self.title.clone(),
+                expected: "chat",
+            }),
+        }
+    }
+
     pub fn subscribe_output(&self) -> broadcast::Receiver<Bytes> {
-        self.output_tx.subscribe()
+        match &self.kind {
+            SessionKind::Terminal(t) => t.output_tx.subscribe(),
+            SessionKind::Chat(_) => {
+                let (tx, rx) = broadcast::channel(1);
+                drop(tx);
+                rx
+            }
+        }
     }
 
     pub fn subscribe_state(&self) -> watch::Receiver<SessionState> {
@@ -283,14 +379,15 @@ impl Session {
     }
 
     pub fn input(&self, data: &[u8]) -> Result<(), SessionError> {
+        let term = self.as_terminal()?;
         if matches!(self.state(), SessionState::Exited { .. }) {
             return Err(SessionError::Exited {
                 title: self.title.clone(),
             });
         }
 
-        let now = self.started_at.elapsed().as_millis() as u64;
-        self.last_activity_ms.store(now, Ordering::Release);
+        let now = term.started_at.elapsed().as_millis() as u64;
+        term.last_activity_ms.store(now, Ordering::Release);
         self.state_tx.send_if_modified(|s| {
             if matches!(s, SessionState::Idle | SessionState::Waiting) {
                 *s = SessionState::Running;
@@ -300,7 +397,7 @@ impl Session {
             }
         });
 
-        let mut writer = self.writer.lock().expect("writer lock poisoned");
+        let mut writer = term.writer.lock().expect("writer lock poisoned");
         let write_res = (|| -> std::io::Result<()> {
             writer.write_all(data)?;
             writer.flush()
@@ -319,6 +416,7 @@ impl Session {
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), SessionError> {
+        let term = self.as_terminal()?;
         let Some(cols_nz) = NonZeroU16::new(cols) else {
             return Err(SessionError::InvalidSize);
         };
@@ -332,7 +430,7 @@ impl Session {
             });
         }
 
-        let master = self.master.lock().expect("master lock poisoned");
+        let master = term.master.lock().expect("master lock poisoned");
         if let Err(e) = master.resize(PtySize {
             rows,
             cols,
@@ -348,13 +446,16 @@ impl Session {
         }
         drop(master);
 
-        let mut parser = self.parser.lock().expect("parser lock poisoned");
+        let mut parser = term.parser.lock().expect("parser lock poisoned");
         parser.set_size(rows_nz, cols_nz);
         Ok(())
     }
 
     pub fn snapshot(&self) -> Vec<u8> {
-        let mut parser = self.parser.lock().expect("parser lock poisoned");
+        let SessionKind::Terminal(term) = &self.kind else {
+            return Vec::new();
+        };
+        let mut parser = term.parser.lock().expect("parser lock poisoned");
         let (rows, cols) = parser.screen().size();
         let rows_usize = usize::from(rows.get());
         let cols_u16 = cols.get();
@@ -390,7 +491,10 @@ impl Session {
     }
 
     pub fn read(&self, lines: Option<usize>) -> String {
-        let mut parser = self.parser.lock().expect("parser lock poisoned");
+        let SessionKind::Terminal(term) = &self.kind else {
+            return String::new();
+        };
+        let mut parser = term.parser.lock().expect("parser lock poisoned");
         let (rows, cols) = parser.screen().size();
         let rows = usize::from(rows.get());
         let cols = cols.get();
@@ -428,25 +532,54 @@ impl Session {
         }
     }
 
+    pub fn chat_prompt(&self, text: String) -> Result<(), SessionError> {
+        self.as_chat()?.prompt(text)
+    }
+
+    pub fn chat_permission(
+        &self,
+        request_id: &str,
+        choice: PermissionChoice,
+    ) -> Result<(), SessionError> {
+        self.as_chat()?.resolve_permission(request_id, choice)
+    }
+
+    pub fn chat_cancel(&self) -> Result<(), SessionError> {
+        self.as_chat()?.cancel()
+    }
+
+    pub fn chat_history(&self) -> Result<Vec<ChatEvent>, SessionError> {
+        Ok(self.as_chat()?.history())
+    }
+
     pub fn state(&self) -> SessionState {
         self.state_tx.borrow().clone()
     }
 
     pub fn last_visible_line(&self) -> Option<String> {
-        last_visible_line_from_parser(&self.parser)
+        match &self.kind {
+            SessionKind::Terminal(t) => last_visible_line_from_parser(&t.parser),
+            SessionKind::Chat(c) => c.last_visible_line(),
+        }
     }
 
     pub fn hooks_active(&self) -> bool {
-        self.hooks_active.load(Ordering::Acquire)
+        match &self.kind {
+            SessionKind::Terminal(t) => t.hooks_active.load(Ordering::Acquire),
+            SessionKind::Chat(_) => false,
+        }
     }
 
     pub fn apply_hook(&self, agent: AgentKind, event: &str) {
-        self.hooks_active.store(true, Ordering::Release);
+        let SessionKind::Terminal(term) = &self.kind else {
+            return;
+        };
+        term.hooks_active.store(true, Ordering::Release);
         let Some(next) = state_for_hook(agent, event) else {
             return;
         };
-        let now = self.started_at.elapsed().as_millis() as u64;
-        self.last_activity_ms.store(now, Ordering::Release);
+        let now = term.started_at.elapsed().as_millis() as u64;
+        term.last_activity_ms.store(now, Ordering::Release);
         self.state_tx.send_if_modified(|s| {
             if matches!(s, SessionState::Exited { .. }) || *s == next {
                 false
@@ -467,12 +600,18 @@ impl Session {
             created_at: self.created_at,
             project_id: self.project_id.clone(),
             account_id: self.account_id.clone(),
+            mode: self.mode,
         }
     }
 
     pub fn kill(&self) {
-        if let Ok(mut killer) = self.killer.lock() {
-            let _ = killer.kill();
+        match &self.kind {
+            SessionKind::Terminal(t) => {
+                if let Ok(mut killer) = t.killer.lock() {
+                    let _ = killer.kill();
+                }
+            }
+            SessionKind::Chat(c) => c.kill(),
         }
     }
 
