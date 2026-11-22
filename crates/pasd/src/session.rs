@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use bytes::Bytes;
 use pas_core::protocol::{
     AgentKind, ChatEvent, CreateParams, Mode, Notification, PermissionChoice, SessionInfo,
-    SessionState, WaitUntil,
+    SessionState, WaitUntil, WorktreeInfo,
 };
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use regex::Regex;
@@ -84,6 +84,7 @@ pub struct Session {
     project_id: Option<String>,
     account_id: Option<String>,
     mode: Mode,
+    worktree: Option<WorktreeInfo>,
     state_tx: watch::Sender<SessionState>,
     kind: SessionKind,
 }
@@ -109,6 +110,7 @@ impl Session {
         agent: Option<AgentKind>,
         chats_dir: Option<&Path>,
         events_tx: broadcast::Sender<Notification>,
+        worktree: Option<WorktreeInfo>,
     ) -> Result<Arc<Self>, SessionError> {
         let program = p.command.first().cloned().unwrap_or_default();
         let title = p.title.clone().unwrap_or(program);
@@ -137,6 +139,7 @@ impl Session {
             project_id: p.project_id,
             account_id: p.account_id,
             mode: Mode::Chat,
+            worktree,
             state_tx,
             kind: SessionKind::Chat(chat),
         }))
@@ -147,6 +150,16 @@ impl Session {
         p: CreateParams,
         idle_ms: u64,
         waiting_patterns: Vec<Regex>,
+    ) -> Result<Arc<Self>, SessionError> {
+        Self::spawn_terminal(id, p, idle_ms, waiting_patterns, None)
+    }
+
+    pub fn spawn_terminal(
+        id: String,
+        p: CreateParams,
+        idle_ms: u64,
+        waiting_patterns: Vec<Regex>,
+        worktree: Option<WorktreeInfo>,
     ) -> Result<Arc<Self>, SessionError> {
         let Some(program) = p.command.first().cloned() else {
             return Err(SessionError::Spawn {
@@ -320,6 +333,7 @@ impl Session {
             project_id: p.project_id,
             account_id: p.account_id,
             mode: Mode::Terminal,
+            worktree,
             state_tx,
             kind: SessionKind::Terminal(TerminalSession {
                 parser,
@@ -607,6 +621,7 @@ impl Session {
             project_id: self.project_id.clone(),
             account_id: self.account_id.clone(),
             mode: self.mode,
+            worktree: self.worktree.clone(),
         }
     }
 

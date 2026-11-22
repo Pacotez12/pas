@@ -96,6 +96,7 @@ async fn bridge_forwards_output_events() {
             project_id: None,
             account_id: None,
             mode: pas_core::protocol::Mode::Terminal,
+            worktree: None,
         })
         .await
         .unwrap();

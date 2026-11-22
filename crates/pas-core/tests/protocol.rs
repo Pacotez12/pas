@@ -240,6 +240,7 @@ fn stage2_types_roundtrip() {
         project_id: Some("p1".into()),
         account_id: None,
         mode: pas_core::protocol::Mode::Terminal,
+        worktree: None,
     };
     assert_eq!(
         serde_json::from_str::<SessionInfo>(&serde_json::to_string(&info).unwrap()).unwrap(),

@@ -4,7 +4,8 @@ use std::path::{Component, Path, PathBuf};
 use pas_core::protocol::{
     AccountInfo, AccountQuota, AcpAdapterStatus, AgentKind, ChatEvent, ClaudeConversation,
     CreateParams, CreateResult, GroupInfo, Mode, PermissionChoice, ProjectInfo, SessionInfo,
-    SnapshotResult,
+    SnapshotResult, WorktreeCreateParams, WorktreeInfo, WorktreeListItem, WorktreeRequest,
+    WorktreeSuggestBranchParams, WorktreeSuggestBranchResult,
 };
 use tauri::State;
 
@@ -100,6 +101,7 @@ pub async fn create_session(
     cols: Option<u16>,
     rows: Option<u16>,
     mode: Option<Mode>,
+    worktree: Option<WorktreeRequest>,
 ) -> Result<CreateResult, String> {
     bridge
         .create_session(CreateParams {
@@ -112,6 +114,7 @@ pub async fn create_session(
             project_id,
             account_id,
             mode: mode.unwrap_or(Mode::Terminal),
+            worktree,
         })
         .await
         .map_err(|e| e.to_string())
@@ -231,7 +234,10 @@ pub async fn chat_prompt(
     id: String,
     text: String,
 ) -> Result<(), String> {
-    bridge.chat_prompt(id, text).await.map_err(|e| e.to_string())
+    bridge
+        .chat_prompt(id, text)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -264,6 +270,72 @@ pub async fn chat_terminal_command(
 ) -> Result<Option<Vec<String>>, String> {
     bridge
         .chat_terminal_command(id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn worktree_suggest_branch(
+    bridge: State<'_, Bridge>,
+    project_id: String,
+    agent: Option<String>,
+    title: Option<String>,
+) -> Result<WorktreeSuggestBranchResult, String> {
+    bridge
+        .worktree_suggest_branch(WorktreeSuggestBranchParams {
+            project_id,
+            agent,
+            title,
+        })
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn worktree_create(
+    bridge: State<'_, Bridge>,
+    project_id: String,
+    branch: Option<String>,
+    base: Option<String>,
+    agent: Option<String>,
+    title: Option<String>,
+) -> Result<WorktreeInfo, String> {
+    bridge
+        .worktree_create(WorktreeCreateParams {
+            project_id,
+            branch,
+            base,
+            agent,
+            title,
+        })
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn worktree_list(
+    bridge: State<'_, Bridge>,
+    project_id: String,
+) -> Result<Vec<WorktreeListItem>, String> {
+    bridge
+        .worktree_list(project_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn worktree_merge(bridge: State<'_, Bridge>, id: String) -> Result<WorktreeInfo, String> {
+    bridge.worktree_merge(id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn worktree_remove(
+    bridge: State<'_, Bridge>,
+    id: String,
+    confirm_loss: bool,
+) -> Result<(), String> {
+    bridge
+        .worktree_remove(id, confirm_loss)
         .await
         .map_err(|e| e.to_string())
 }
@@ -318,8 +390,7 @@ fn resolve_visual_path(session_id: &str, file: &str) -> Result<PathBuf, String> 
 #[tauri::command]
 pub fn chat_read_visual(session_id: String, file: String) -> Result<String, String> {
     let path = resolve_visual_path(&session_id, &file)?;
-    std::fs::read_to_string(&path)
-        .map_err(|err| format!("No se pudo leer el visual {file}: {err}"))
+    std::fs::read_to_string(&path).map_err(|err| format!("No se pudo leer el visual {file}: {err}"))
 }
 
 #[tauri::command]

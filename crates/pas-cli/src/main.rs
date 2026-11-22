@@ -12,7 +12,7 @@ use pas_core::protocol::{
     CreateParams, CreateResult, ERR_WAIT_TIMEOUT, IdParams, METHOD_SESSION_CREATE,
     METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_SEND,
     METHOD_SESSION_WAIT, ReadParams, ReadResult, SendParams, SessionInfo, SessionState, WaitParams,
-    WaitUntil,
+    WaitUntil, WorktreeRequest,
 };
 use pas_core::socket::socket_path;
 use serde_json::{Value, json};
@@ -31,6 +31,12 @@ enum Commands {
         cwd: Option<PathBuf>,
         #[arg(long)]
         title: Option<String>,
+        #[arg(long)]
+        worktree: bool,
+        #[arg(long, requires = "worktree")]
+        branch: Option<String>,
+        #[arg(long, requires = "worktree")]
+        base: Option<String>,
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
@@ -120,12 +126,20 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
         Commands::New {
             cwd,
             title,
+            worktree,
+            branch,
+            base,
             command,
         } => {
             // pasd runs in its own folder, so a relative --cwd must be resolved here.
             let cwd = match cwd {
                 Some(dir) => std::path::absolute(dir)?,
                 None => std::env::current_dir()?,
+            };
+            let worktree = if worktree {
+                Some(WorktreeRequest { branch, base })
+            } else {
+                None
             };
             let res: CreateResult = client
                 .call(
@@ -140,6 +154,7 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
                         project_id: None,
                         account_id: None,
                         mode: pas_core::protocol::Mode::Terminal,
+                        worktree,
                     },
                 )
                 .await?;

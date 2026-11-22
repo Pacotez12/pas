@@ -8,19 +8,22 @@ use pas_core::protocol::{
     ERR_ACCOUNT_ALREADY_EXISTS, ERR_ACCOUNT_DIR_INVALID, ERR_ACCOUNT_NOT_FOUND,
     ERR_GROUP_ALREADY_EXISTS, ERR_GROUP_NOT_FOUND, ERR_HOOKS_CONFIG_INVALID, ERR_INVALID_PARAMS,
     ERR_METHOD_NOT_FOUND, ERR_NOT_A_GIT_REPO, ERR_PROJECT_ALREADY_EXISTS, ERR_PROJECT_NOT_FOUND,
-    GroupCreateParams, GroupRenameParams, HookParams, IdParams, InputParams, METHOD_ACCOUNT_ADD,
-    METHOD_ACCOUNT_INSTALL_HOOKS, METHOD_ACCOUNT_LIST, METHOD_ACCOUNT_REMOVE,
-    METHOD_ACCOUNT_RENAME, METHOD_ACCOUNT_UNINSTALL_HOOKS, METHOD_ACP_INSTALL, METHOD_ACP_STATUS,
-    METHOD_CHAT_CANCEL, METHOD_CHAT_HISTORY, METHOD_CHAT_PERMISSION, METHOD_CHAT_PROMPT,
-    METHOD_CHAT_TERMINAL_COMMAND, METHOD_CLAUDE_CONVERSATIONS, METHOD_DAEMON_PING,
-    METHOD_GROUP_CREATE, METHOD_GROUP_LIST, METHOD_GROUP_RENAME, METHOD_PROJECT_ADD,
-    METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE, METHOD_PROJECT_REMOVE, METHOD_PROJECT_RENAME,
-    METHOD_PROJECT_UNPIN, METHOD_QUOTA_LIST, METHOD_QUOTA_REPORT, METHOD_SESSION_CREATE,
-    METHOD_SESSION_HOOK, METHOD_SESSION_INPUT, METHOD_SESSION_KILL, METHOD_SESSION_LIST,
-    METHOD_SESSION_READ, METHOD_SESSION_REMOVE, METHOD_SESSION_RESIZE, METHOD_SESSION_SEND,
-    METHOD_SESSION_SNAPSHOT, METHOD_SESSION_WAIT, PingResult, ProjectAddParams, ProjectMoveParams,
+    ERR_WORKTREE_NOT_FOUND, GroupCreateParams, GroupRenameParams, HookParams, IdParams,
+    InputParams, METHOD_ACCOUNT_ADD, METHOD_ACCOUNT_INSTALL_HOOKS, METHOD_ACCOUNT_LIST,
+    METHOD_ACCOUNT_REMOVE, METHOD_ACCOUNT_RENAME, METHOD_ACCOUNT_UNINSTALL_HOOKS,
+    METHOD_ACP_INSTALL, METHOD_ACP_STATUS, METHOD_CHAT_CANCEL, METHOD_CHAT_HISTORY,
+    METHOD_CHAT_PERMISSION, METHOD_CHAT_PROMPT, METHOD_CHAT_TERMINAL_COMMAND,
+    METHOD_CLAUDE_CONVERSATIONS, METHOD_DAEMON_PING, METHOD_GROUP_CREATE, METHOD_GROUP_LIST,
+    METHOD_GROUP_RENAME, METHOD_PROJECT_ADD, METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE,
+    METHOD_PROJECT_REMOVE, METHOD_PROJECT_RENAME, METHOD_PROJECT_UNPIN, METHOD_QUOTA_LIST,
+    METHOD_QUOTA_REPORT, METHOD_SESSION_CREATE, METHOD_SESSION_HOOK, METHOD_SESSION_INPUT,
+    METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_REMOVE,
+    METHOD_SESSION_RESIZE, METHOD_SESSION_SEND, METHOD_SESSION_SNAPSHOT, METHOD_SESSION_WAIT,
+    METHOD_WORKTREE_CREATE, METHOD_WORKTREE_LIST, METHOD_WORKTREE_MERGE, METHOD_WORKTREE_REMOVE,
+    METHOD_WORKTREE_SUGGEST_BRANCH, PingResult, ProjectAddParams, ProjectMoveParams,
     ProjectRenameParams, QuotaReportParams, ReadParams, ReadResult, Request, ResizeParams,
-    Response, RpcError, SendParams, SnapshotResult, WaitParams,
+    Response, RpcError, SendParams, SnapshotResult, WaitParams, WorktreeCreateParams,
+    WorktreeListParams, WorktreeRemoveParams, WorktreeSuggestBranchParams,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -30,6 +33,7 @@ use crate::claude;
 use crate::hooks_install::HooksInstallError;
 use crate::manager::{Manager, session_error_to_rpc};
 use crate::store::StoreError;
+use crate::worktree;
 
 pub async fn dispatch(mgr: &Manager, req: Request) -> Response {
     let id = req.id;
@@ -286,6 +290,38 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
             let status = mgr.acp_install(params.agent).await?;
             ok_json(status)
         }
+        METHOD_WORKTREE_SUGGEST_BRANCH => {
+            let params: WorktreeSuggestBranchParams = parse_params(req.params)?;
+            let wt_dir = mgr.worktrees_dir();
+            let res = worktree::suggest_branch(mgr.store(), wt_dir.as_deref(), params)
+                .map_err(worktree::worktree_error_to_rpc)?;
+            ok_json(res)
+        }
+        METHOD_WORKTREE_CREATE => {
+            let params: WorktreeCreateParams = parse_params(req.params)?;
+            let wt_dir = mgr.worktrees_dir();
+            let wt = worktree::create(mgr.store(), wt_dir.as_deref(), params)
+                .map_err(worktree::worktree_error_to_rpc)?;
+            ok_json(wt)
+        }
+        METHOD_WORKTREE_LIST => {
+            let params: WorktreeListParams = parse_params(req.params)?;
+            let list = worktree::list(mgr.store(), &params.project_id)
+                .map_err(worktree::worktree_error_to_rpc)?;
+            ok_json(list)
+        }
+        METHOD_WORKTREE_MERGE => {
+            let params: IdParams = parse_params(req.params)?;
+            let wt = worktree::merge(mgr.store(), &params.id)
+                .map_err(worktree::worktree_error_to_rpc)?;
+            ok_json(wt)
+        }
+        METHOD_WORKTREE_REMOVE => {
+            let params: WorktreeRemoveParams = parse_params(req.params)?;
+            worktree::remove(mgr.store(), &params.id, params.confirm_loss)
+                .map_err(worktree::worktree_error_to_rpc)?;
+            Ok(json!({}))
+        }
         other => Err(RpcError {
             code: ERR_METHOD_NOT_FOUND,
             message: format!("Método desconocido: {other}."),
@@ -301,6 +337,7 @@ pub(crate) fn store_error_to_rpc(err: StoreError) -> RpcError {
         StoreError::GroupNotFound { .. } => ERR_GROUP_NOT_FOUND,
         StoreError::GroupAlreadyExists { .. } => ERR_GROUP_ALREADY_EXISTS,
         StoreError::AccountNotFound => ERR_ACCOUNT_NOT_FOUND,
+        StoreError::WorktreeNotFound => ERR_WORKTREE_NOT_FOUND,
         StoreError::AccountAlreadyExists { .. } => ERR_ACCOUNT_ALREADY_EXISTS,
         StoreError::AccountDirInvalid { .. } => ERR_ACCOUNT_DIR_INVALID,
         StoreError::NoAccountsDir | StoreError::EmptyName { .. } => ERR_INVALID_PARAMS,

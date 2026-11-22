@@ -232,7 +232,15 @@ fn relative_cwd_is_resolved_from_caller_dir() {
 
     env.pas()
         .current_dir(caller_dir.path())
-        .args(["new", "--cwd", ".", "--title", "rel", "--", &fake_agent_bin()])
+        .args([
+            "new",
+            "--cwd",
+            ".",
+            "--title",
+            "rel",
+            "--",
+            &fake_agent_bin(),
+        ])
         .assert()
         .success();
 
@@ -241,4 +249,70 @@ fn relative_cwd_is_resolved_from_caller_dir() {
     let want = caller_dir.path().display().to_string();
     assert!(list_out.contains(&want), "list: {list_out:?}, want {want}");
     env.pas().args(["kill", "rel"]).assert().success();
+}
+
+#[test]
+fn cli_new_worktree() {
+    let env = TestEnv::new();
+    let repo_dir = tempdir().unwrap();
+    let repo = repo_dir.path().join("demo");
+    fs::create_dir_all(&repo).unwrap();
+
+    let run_git = |args: &[&str]| {
+        let st = Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(st.success(), "git {args:?} falló");
+    };
+    run_git(&["init", "-b", "main", "--quiet"]);
+    run_git(&["config", "user.email", "test@pas.local"]);
+    run_git(&["config", "user.name", "Pas Test"]);
+    fs::write(repo.join("README.md"), "hola\n").unwrap();
+    run_git(&["add", "README.md"]);
+    run_git(&["commit", "-m", "init", "--quiet"]);
+
+    let out = env
+        .pas()
+        .args([
+            "new",
+            "--cwd",
+            repo.to_str().unwrap(),
+            "--title",
+            "wt-cli",
+            "--worktree",
+            "--branch",
+            "pas/cli-test",
+            "--base",
+            "main",
+            "--",
+            &fake_agent_bin(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "pas new --worktree falló: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let list = env.pas().args(["list", "--json"]).output().unwrap();
+    assert!(list.status.success());
+    let sessions: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let sess = sessions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["title"] == "wt-cli")
+        .expect("no apareció wt-cli en pas list --json");
+    assert_eq!(sess["worktree"]["branch"], "pas/cli-test");
+    assert_eq!(sess["cwd"], sess["worktree"]["path"]);
+    assert_ne!(
+        sess["cwd"].as_str().unwrap(),
+        repo.to_str().unwrap(),
+        "debería correr en el worktree, no en el repo principal"
+    );
+
+    env.pas().args(["kill", "wt-cli"]).assert().success();
 }

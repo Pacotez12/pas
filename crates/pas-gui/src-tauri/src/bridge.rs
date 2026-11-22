@@ -22,9 +22,12 @@ use pas_core::protocol::{
     METHOD_PROJECT_RENAME, METHOD_PROJECT_UNPIN, METHOD_QUOTA_LIST, METHOD_SESSION_CREATE,
     METHOD_SESSION_INPUT, METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_REMOVE,
     METHOD_SESSION_RESIZE, METHOD_SESSION_SNAPSHOT, METHOD_SESSION_SUBSCRIBE,
-    METHOD_SESSION_SUBSCRIBE_ALL, METHOD_SESSION_UNSUBSCRIBE, Notification, PermissionChoice,
-    ProjectAddParams, ProjectInfo, ProjectMoveParams, ProjectRenameParams, ResizeParams,
-    SessionInfo, SessionRemovedEvent, SnapshotResult,
+    METHOD_SESSION_SUBSCRIBE_ALL, METHOD_SESSION_UNSUBSCRIBE, METHOD_WORKTREE_CREATE,
+    METHOD_WORKTREE_LIST, METHOD_WORKTREE_MERGE, METHOD_WORKTREE_REMOVE,
+    METHOD_WORKTREE_SUGGEST_BRANCH, Notification, PermissionChoice, ProjectAddParams, ProjectInfo,
+    ProjectMoveParams, ProjectRenameParams, ResizeParams, SessionInfo, SessionRemovedEvent,
+    SnapshotResult, WorktreeCreateParams, WorktreeInfo, WorktreeListItem, WorktreeListParams,
+    WorktreeRemoveParams, WorktreeSuggestBranchParams, WorktreeSuggestBranchResult,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -299,6 +302,42 @@ impl Bridge {
     ) -> Result<Option<Vec<String>>, CoreError> {
         self.call(METHOD_CHAT_TERMINAL_COMMAND, IdParams { id })
             .await
+    }
+
+    pub async fn worktree_suggest_branch(
+        &self,
+        params: WorktreeSuggestBranchParams,
+    ) -> Result<WorktreeSuggestBranchResult, CoreError> {
+        self.call(METHOD_WORKTREE_SUGGEST_BRANCH, params).await
+    }
+
+    pub async fn worktree_create(
+        &self,
+        params: WorktreeCreateParams,
+    ) -> Result<WorktreeInfo, CoreError> {
+        self.call(METHOD_WORKTREE_CREATE, params).await
+    }
+
+    pub async fn worktree_list(
+        &self,
+        project_id: String,
+    ) -> Result<Vec<WorktreeListItem>, CoreError> {
+        self.call(METHOD_WORKTREE_LIST, WorktreeListParams { project_id })
+            .await
+    }
+
+    pub async fn worktree_merge(&self, id: String) -> Result<WorktreeInfo, CoreError> {
+        self.call(METHOD_WORKTREE_MERGE, IdParams { id }).await
+    }
+
+    pub async fn worktree_remove(&self, id: String, confirm_loss: bool) -> Result<(), CoreError> {
+        let _: Value = self
+            .call(
+                METHOD_WORKTREE_REMOVE,
+                WorktreeRemoveParams { id, confirm_loss },
+            )
+            .await?;
+        Ok(())
     }
 
     pub async fn session_input(&self, id: String, data_b64: String) -> Result<(), CoreError> {

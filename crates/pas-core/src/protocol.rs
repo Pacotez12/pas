@@ -44,6 +44,11 @@ pub const METHOD_CHAT_HISTORY: &str = "chat.history";
 pub const METHOD_CHAT_TERMINAL_COMMAND: &str = "chat.terminal_command";
 pub const METHOD_ACP_STATUS: &str = "acp.status";
 pub const METHOD_ACP_INSTALL: &str = "acp.install";
+pub const METHOD_WORKTREE_CREATE: &str = "worktree.create";
+pub const METHOD_WORKTREE_LIST: &str = "worktree.list";
+pub const METHOD_WORKTREE_MERGE: &str = "worktree.merge";
+pub const METHOD_WORKTREE_REMOVE: &str = "worktree.remove";
+pub const METHOD_WORKTREE_SUGGEST_BRANCH: &str = "worktree.suggest_branch";
 
 pub const EVENT_SESSION_OUTPUT: &str = "session.output";
 pub const EVENT_SESSION_STATE: &str = "session.state";
@@ -75,6 +80,13 @@ pub const ERR_PERMISSION_NOT_FOUND: i32 = 1016;
 pub const ERR_CHAT_BUSY: i32 = 1017;
 pub const ERR_ADAPTER_NOT_FOUND: i32 = 1018;
 pub const ERR_ADAPTER_INSTALL_FAILED: i32 = 1019;
+pub const ERR_WORKTREE_NOT_FOUND: i32 = 1020;
+pub const ERR_WORKTREE_DIRTY_MAIN: i32 = 1021;
+pub const ERR_WORKTREE_WRONG_BASE: i32 = 1022;
+pub const ERR_WORKTREE_MERGE_CONFLICT: i32 = 1023;
+pub const ERR_WORKTREE_CONFIRM_REQUIRED: i32 = 1024;
+pub const ERR_WORKTREE_BRANCH_EXISTS: i32 = 1025;
+pub const ERR_WORKTREE_GIT_FAILED: i32 = 1026;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
@@ -170,6 +182,8 @@ pub struct SessionInfo {
     pub account_id: Option<String>,
     #[serde(default)]
     pub mode: Mode,
+    #[serde(default)]
+    pub worktree: Option<WorktreeInfo>,
 }
 
 fn default_cols() -> u16 {
@@ -202,6 +216,8 @@ pub struct CreateParams {
     pub account_id: Option<String>,
     #[serde(default)]
     pub mode: Mode,
+    #[serde(default)]
+    pub worktree: Option<WorktreeRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -559,4 +575,108 @@ pub struct AcpAdapterStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AcpInstallParams {
     pub agent: AgentKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorktreeState {
+    Active,
+    Merged,
+    Removed,
+}
+
+impl WorktreeState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Merged => "merged",
+            Self::Removed => "removed",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "active" => Some(Self::Active),
+            "merged" => Some(Self::Merged),
+            "removed" => Some(Self::Removed),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeInfo {
+    pub id: String,
+    pub project_id: String,
+    pub branch: String,
+    pub base: String,
+    pub path: PathBuf,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    pub state: WorktreeState,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeStatus {
+    pub uncommitted: Vec<String>,
+    pub ahead: u32,
+    pub merged: bool,
+    pub missing: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeListItem {
+    #[serde(flatten)]
+    pub info: WorktreeInfo,
+    pub status: WorktreeStatus,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeRequest {
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub base: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeCreateParams {
+    pub project_id: String,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub base: Option<String>,
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeListParams {
+    pub project_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeRemoveParams {
+    pub id: String,
+    #[serde(default)]
+    pub confirm_loss: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeSuggestBranchParams {
+    pub project_id: String,
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeSuggestBranchResult {
+    pub branch: String,
+    pub base: String,
+    pub path: PathBuf,
 }

@@ -6,12 +6,13 @@ use std::time::Duration;
 
 use pas_core::protocol::{
     AccountQuota, AcpAdapterStatus, AgentKind, CreateParams, ERR_ADAPTER_INSTALL_FAILED,
-    ERR_ADAPTER_NOT_FOUND, ERR_CHAT_BUSY, ERR_INVALID_PARAMS, ERR_PERMISSION_NOT_FOUND,
-    ERR_SESSION_EXITED, ERR_SESSION_NOT_FOUND, ERR_SESSION_RUNNING, ERR_SPAWN_FAILED,
-    ERR_WAIT_TIMEOUT, ERR_WRONG_SESSION_MODE, EVENT_QUOTA_CHANGED, EVENT_QUOTA_WARNING,
-    EVENT_SESSION_CREATED, EVENT_SESSION_FOCUS_REQUEST, EVENT_SESSION_REMOVED, EVENT_SESSION_STATE,
-    Mode, Notification, QuotaReportParams, RpcError, SessionCreatedEvent, SessionFocusRequestEvent,
-    SessionInfo, SessionRemovedEvent, SessionState, SessionStateEvent,
+    ERR_ADAPTER_NOT_FOUND, ERR_CHAT_BUSY, ERR_INVALID_PARAMS, ERR_NOT_A_GIT_REPO,
+    ERR_PERMISSION_NOT_FOUND, ERR_SESSION_EXITED, ERR_SESSION_NOT_FOUND, ERR_SESSION_RUNNING,
+    ERR_SPAWN_FAILED, ERR_WAIT_TIMEOUT, ERR_WRONG_SESSION_MODE, EVENT_QUOTA_CHANGED,
+    EVENT_QUOTA_WARNING, EVENT_SESSION_CREATED, EVENT_SESSION_FOCUS_REQUEST, EVENT_SESSION_REMOVED,
+    EVENT_SESSION_STATE, Mode, Notification, QuotaReportParams, RpcError, SessionCreatedEvent,
+    SessionFocusRequestEvent, SessionInfo, SessionRemovedEvent, SessionState, SessionStateEvent,
+    WorktreeCreateParams,
 };
 use pas_core::socket::socket_path as default_socket_path;
 use serde_json::json;
@@ -26,6 +27,7 @@ use crate::quota::{self, QuotaTracker, QuotaUpdate};
 use crate::rpc::store_error_to_rpc;
 use crate::session::{Session, SessionError};
 use crate::store::{Store, StoreError};
+use crate::worktree;
 
 const EVENTS_BROADCAST_CAPACITY: usize = 1024;
 
@@ -248,6 +250,22 @@ impl Manager {
         self.accounts_dir.as_deref()
     }
 
+    pub fn worktrees_dir(&self) -> Option<PathBuf> {
+        if let Some(ref custom) = self.config.worktrees_dir {
+            return Some(worktree::expand_tilde(custom));
+        }
+        self.acp_env
+            .data_dir
+            .as_deref()
+            .map(|p| p.join("worktrees"))
+            .or_else(|| {
+                self.accounts_dir
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .map(|p| p.join("worktrees"))
+            })
+    }
+
     pub fn socket_path(&self) -> Option<&Path> {
         self.socket_path.as_deref()
     }
@@ -322,18 +340,90 @@ impl Manager {
             .filter(|t| !t.is_empty())
             .unwrap_or_else(|| params.command.first().cloned().unwrap_or_default());
 
+        let mut created_worktree = if let Some(wt_req) = params.worktree.take() {
+            let project_id = match params
+                .project_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+            {
+                Some(id) => id.to_string(),
+                None => {
+                    let Some(root) = worktree::git_repo_root(&params.cwd) else {
+                        return Err(RpcError {
+                            code: ERR_NOT_A_GIT_REPO,
+                            message: format!(
+                                "{} no es un repositorio git. Entrá a un repo git para abrir una sesión en worktree.",
+                                params.cwd.display()
+                            ),
+                        });
+                    };
+                    let proj = match self.store.find_project_for_cwd(&root) {
+                        Ok(Some(existing)) => existing,
+                        _ => match self.store.add_project(&root, None) {
+                            Ok(added) => added,
+                            Err(StoreError::ProjectAlreadyExists { .. }) => self
+                                .store
+                                .find_project_for_cwd(&root)
+                                .map_err(store_error_to_rpc)?
+                                .ok_or_else(|| RpcError {
+                                    code: ERR_NOT_A_GIT_REPO,
+                                    message: format!(
+                                        "{} no es un repositorio git. Entrá a un repo git para abrir una sesión en worktree.",
+                                        params.cwd.display()
+                                    ),
+                                })?,
+                            Err(err) => return Err(store_error_to_rpc(err)),
+                        },
+                    };
+                    params.project_id = Some(proj.id.clone());
+                    proj.id
+                }
+            };
+
+            let agent_name = agent_kind.map(|a| a.as_str().to_string()).or_else(|| {
+                params
+                    .command
+                    .first()
+                    .and_then(|c| Path::new(c).file_name())
+                    .and_then(|n| n.to_str())
+                    .map(ToOwned::to_owned)
+            });
+            let wt_dir = self.worktrees_dir();
+            let wt = worktree::create(
+                &self.store,
+                wt_dir.as_deref(),
+                WorktreeCreateParams {
+                    project_id,
+                    branch: wt_req.branch,
+                    base: wt_req.base,
+                    agent: agent_name,
+                    title: Some(base_title.clone()),
+                },
+            )
+            .map_err(worktree::worktree_error_to_rpc)?;
+            params.cwd = wt.path.clone();
+            Some(wt)
+        } else {
+            None
+        };
+
         let mut sessions = self.sessions.write().expect("sessions lock poisoned");
 
         let title = unique_title(&sessions, &base_title);
         let id = unique_id(&sessions);
         params.title = Some(title.clone());
+        if let Some(ref mut wt) = created_worktree {
+            wt.session_id = Some(id.clone());
+        }
 
-        let session = match params.mode {
-            Mode::Terminal => Session::spawn_with_waiting_patterns(
+        let spawn_result = match params.mode {
+            Mode::Terminal => Session::spawn_terminal(
                 id.clone(),
                 params,
                 self.idle_ms,
                 waiting_patterns,
+                created_worktree.clone(),
             ),
             Mode::Chat => {
                 let chats_dir = self
@@ -353,12 +443,26 @@ impl Manager {
                     agent_kind,
                     chats_dir.as_deref(),
                     self.events_tx.clone(),
+                    created_worktree.clone(),
                 )
             }
-        }
-        .map_err(session_error_to_rpc)?;
+        };
+        let session = match spawn_result {
+            Ok(session) => session,
+            Err(err) => {
+                drop(sessions);
+                if let Some(wt) = created_worktree {
+                    let _ = worktree::remove(&self.store, &wt.id, true);
+                }
+                return Err(session_error_to_rpc(err));
+            }
+        };
         sessions.insert(id.clone(), Arc::clone(&session));
         drop(sessions);
+
+        if let Some(ref wt) = created_worktree {
+            let _ = self.store.set_worktree_session(&wt.id, Some(&id));
+        }
 
         let mut state_rx = session.subscribe_state();
         let mut info = session.info();

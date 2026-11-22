@@ -62,6 +62,9 @@ pub struct Config {
 
     #[serde(default)]
     pub waiting_patterns: BTreeMap<String, Vec<String>>,
+
+    #[serde(default)]
+    pub worktrees_dir: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -70,6 +73,7 @@ impl Default for Config {
             notifications: true,
             quota_warn_percent: DEFAULT_QUOTA_WARN_PERCENT,
             waiting_patterns: default_waiting_patterns(),
+            worktrees_dir: None,
         }
     }
 }
@@ -84,6 +88,9 @@ struct RawConfig {
 
     #[serde(default)]
     waiting_patterns: BTreeMap<String, Vec<String>>,
+
+    #[serde(default)]
+    worktrees_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -134,6 +141,7 @@ impl Config {
             notifications: raw.notifications,
             quota_warn_percent: raw.quota_warn_percent,
             waiting_patterns,
+            worktrees_dir: raw.worktrees_dir,
         };
         cfg.validate()?;
         Ok(cfg)

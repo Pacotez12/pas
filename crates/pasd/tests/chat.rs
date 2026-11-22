@@ -1139,10 +1139,7 @@ async fn permission_tool_update_uses_permission_title_and_visual_follows_text() 
 
     let prompt_res = dispatch(
         &mgr,
-        req(
-            "chat.prompt",
-            json!({ "id": created.id, "text": "hacelo" }),
-        ),
+        req("chat.prompt", json!({ "id": created.id, "text": "hacelo" })),
     )
     .await;
     assert!(prompt_res.error.is_none(), "{:?}", prompt_res.error);

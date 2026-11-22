@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pas_core::protocol::{AccountInfo, AgentKind, GroupInfo, ProjectInfo};
+use pas_core::protocol::{
+    AccountInfo, AgentKind, GroupInfo, ProjectInfo, WorktreeInfo, WorktreeState,
+};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::hooks_install::FileSnapshot;
@@ -30,6 +32,9 @@ pub enum StoreError {
 
     #[error("No se encontró esa cuenta. Revisá la lista de cuentas disponibles.")]
     AccountNotFound,
+
+    #[error("No se encontró ese worktree. Revisá la lista de worktrees del proyecto.")]
+    WorktreeNotFound,
 
     #[error(
         "Ya existe una cuenta que apunta a {}. Dos cuentas de pas no pueden compartir directorio; elegí otra carpeta.",
@@ -169,6 +174,17 @@ impl Store {
             projects.push(row?);
         }
         Ok(projects)
+    }
+
+    pub fn get_project(&self, id: &str) -> Result<ProjectInfo, StoreError> {
+        let conn = self.conn.lock().expect("store lock poisoned");
+        conn.query_row(
+            "SELECT id, name, path, group_id, group_pinned FROM projects WHERE id = ?1",
+            params![id],
+            map_project_row,
+        )
+        .optional()?
+        .ok_or_else(|| StoreError::ProjectNotFound { id: id.to_string() })
     }
 
     pub fn find_project_for_cwd(&self, cwd: &Path) -> Result<Option<ProjectInfo>, StoreError> {
@@ -629,6 +645,119 @@ impl Store {
         )?;
         Ok(())
     }
+
+    pub fn insert_worktree(
+        &self,
+        project_id: &str,
+        branch: &str,
+        base: &str,
+        path: &Path,
+        session_id: Option<&str>,
+    ) -> Result<WorktreeInfo, StoreError> {
+        let path_str = path.to_string_lossy().into_owned();
+        let created_at = now_unix_secs();
+
+        let mut conn = self.conn.lock().expect("store lock poisoned");
+        let tx = conn.transaction()?;
+        let _ = fetch_project(&tx, project_id)?;
+        let id = unique_id(&tx, "worktrees")?;
+        tx.execute(
+            "INSERT INTO worktrees (id, project_id, branch, base, path, session_id, state, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7)",
+            params![&id, project_id, branch, base, &path_str, session_id, created_at],
+        )?;
+        tx.commit()?;
+
+        Ok(WorktreeInfo {
+            id,
+            project_id: project_id.to_string(),
+            branch: branch.to_string(),
+            base: base.to_string(),
+            path: path.to_path_buf(),
+            session_id: session_id.map(ToOwned::to_owned),
+            state: WorktreeState::Active,
+            created_at: created_at.max(0) as u64,
+        })
+    }
+
+    pub fn get_worktree(&self, id: &str) -> Result<WorktreeInfo, StoreError> {
+        let conn = self.conn.lock().expect("store lock poisoned");
+        conn.query_row(
+            "SELECT id, project_id, branch, base, path, session_id, state, created_at
+             FROM worktrees
+             WHERE id = ?1",
+            params![id],
+            map_worktree_row,
+        )
+        .optional()?
+        .ok_or(StoreError::WorktreeNotFound)
+    }
+
+    pub fn list_worktrees(&self, project_id: &str) -> Result<Vec<WorktreeInfo>, StoreError> {
+        let conn = self.conn.lock().expect("store lock poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, branch, base, path, session_id, state, created_at
+             FROM worktrees
+             WHERE project_id = ?1 AND state != 'removed'
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map(params![project_id], map_worktree_row)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn set_worktree_state(
+        &self,
+        id: &str,
+        state: WorktreeState,
+    ) -> Result<WorktreeInfo, StoreError> {
+        let mut conn = self.conn.lock().expect("store lock poisoned");
+        let tx = conn.transaction()?;
+        let updated = tx.execute(
+            "UPDATE worktrees SET state = ?1 WHERE id = ?2",
+            params![state.as_str(), id],
+        )?;
+        if updated == 0 {
+            return Err(StoreError::WorktreeNotFound);
+        }
+        let info = tx.query_row(
+            "SELECT id, project_id, branch, base, path, session_id, state, created_at
+             FROM worktrees
+             WHERE id = ?1",
+            params![id],
+            map_worktree_row,
+        )?;
+        tx.commit()?;
+        Ok(info)
+    }
+
+    pub fn set_worktree_session(
+        &self,
+        id: &str,
+        session_id: Option<&str>,
+    ) -> Result<WorktreeInfo, StoreError> {
+        let mut conn = self.conn.lock().expect("store lock poisoned");
+        let tx = conn.transaction()?;
+        let updated = tx.execute(
+            "UPDATE worktrees SET session_id = ?1 WHERE id = ?2",
+            params![session_id, id],
+        )?;
+        if updated == 0 {
+            return Err(StoreError::WorktreeNotFound);
+        }
+        let info = tx.query_row(
+            "SELECT id, project_id, branch, base, path, session_id, state, created_at
+             FROM worktrees
+             WHERE id = ?1",
+            params![id],
+            map_worktree_row,
+        )?;
+        tx.commit()?;
+        Ok(info)
+    }
 }
 
 fn init_connection(conn: &Connection) -> Result<(), StoreError> {
@@ -683,7 +812,47 @@ fn init_connection(conn: &Connection) -> Result<(), StoreError> {
              COMMIT;",
         )?;
     }
+    if version < 4 {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE IF NOT EXISTS worktrees (
+                 id TEXT PRIMARY KEY,
+                 project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                 branch TEXT NOT NULL,
+                 base TEXT NOT NULL,
+                 path TEXT NOT NULL,
+                 session_id TEXT,
+                 state TEXT NOT NULL CHECK(state IN ('active', 'merged', 'removed')),
+                 created_at INTEGER NOT NULL
+             );
+             PRAGMA user_version = 4;
+             COMMIT;",
+        )?;
+    }
     Ok(())
+}
+
+fn map_worktree_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorktreeInfo> {
+    let path: String = row.get(4)?;
+    let state_str: String = row.get(6)?;
+    let state = WorktreeState::parse(&state_str).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            6,
+            rusqlite::types::Type::Text,
+            format!("estado inválido en worktrees: {state_str}").into(),
+        )
+    })?;
+    let created_at: i64 = row.get(7)?;
+    Ok(WorktreeInfo {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        branch: row.get(2)?,
+        base: row.get(3)?,
+        path: PathBuf::from(path),
+        session_id: row.get(5)?,
+        state,
+        created_at: created_at.max(0) as u64,
+    })
 }
 
 fn map_account_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AccountInfo> {
@@ -809,6 +978,7 @@ fn unique_id(tx: &Transaction<'_>, table: &str) -> Result<String, StoreError> {
         "groups" => "SELECT 1 FROM groups WHERE id = ?1",
         "projects" => "SELECT 1 FROM projects WHERE id = ?1",
         "accounts" => "SELECT 1 FROM accounts WHERE id = ?1",
+        "worktrees" => "SELECT 1 FROM worktrees WHERE id = ?1",
         _ => unreachable!("tabla desconocida: {table}"),
     };
     let mut bytes = [0u8; 4];

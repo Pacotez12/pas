@@ -43,6 +43,7 @@ fn params_for(cmd: Vec<String>) -> CreateParams {
         project_id: None,
         account_id: None,
         mode: pas_core::protocol::Mode::Terminal,
+        worktree: None,
     }
 }
 
