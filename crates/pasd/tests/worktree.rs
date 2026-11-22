@@ -891,3 +891,26 @@ async fn session_info_includes_branch() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn branches_lists_local_branches_and_current() {
+    let env = WorktreeEnv::new().await;
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&env.repo)
+        .args(["branch", "develop"])
+        .output()
+        .expect("git branch develop");
+    assert!(out.status.success());
+
+    let r = dispatch(
+        &env.mgr,
+        req("worktree.branches", json!({ "project_id": env.project.id })),
+    )
+    .await;
+    assert!(r.error.is_none(), "error listando ramas: {:?}", r.error);
+    let val = r.result.unwrap();
+    assert_eq!(val["current"].as_str(), Some("main"));
+    let branches: Vec<String> = serde_json::from_value(val["branches"].clone()).unwrap();
+    assert_eq!(branches, vec!["develop".to_string(), "main".to_string()]);
+}

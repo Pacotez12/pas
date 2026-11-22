@@ -79,6 +79,7 @@ pub fn run() {
             commands::chat_history,
             commands::chat_terminal_command,
             commands::worktree_suggest_branch,
+            commands::worktree_branches,
             commands::worktree_create,
             commands::worktree_list,
             commands::worktree_merge,

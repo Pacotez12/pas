@@ -9,6 +9,46 @@ export type SessionState =
   | { state: "idle" }
   | { state: "exited"; code: number | null };
 
+export type WorktreeState = "active" | "merged" | "removed";
+
+export interface WorktreeInfo {
+  id: string;
+  project_id: string;
+  branch: string;
+  base: string;
+  path: string;
+  session_id: string | null;
+  state: WorktreeState;
+  created_at: number;
+}
+
+export interface WorktreeStatus {
+  uncommitted: string[];
+  ahead: number;
+  merged: boolean;
+  missing: boolean;
+}
+
+export interface WorktreeListItem extends WorktreeInfo {
+  status: WorktreeStatus;
+}
+
+export interface WorktreeRequest {
+  branch?: string | null;
+  base?: string | null;
+}
+
+export interface WorktreeSuggestBranchResult {
+  branch: string;
+  base: string;
+  path: string;
+}
+
+export interface WorktreeBranchesResult {
+  current: string | null;
+  branches: string[];
+}
+
 export interface SessionInfo {
   id: string;
   title: string;
@@ -19,6 +59,7 @@ export interface SessionInfo {
   project_id: string | null;
   account_id: string | null;
   mode: SessionMode;
+  worktree?: WorktreeInfo | null;
 }
 
 export type PermissionChoice = "allow" | "allow_session" | "deny";
@@ -167,6 +208,7 @@ export const api = {
     cols?: number;
     rows?: number;
     mode?: SessionMode;
+    worktree?: WorktreeRequest | null;
   }) =>
     invoke<{ id: string }>("create_session", {
       projectId: params.projectId,
@@ -177,6 +219,7 @@ export const api = {
       cols: params.cols ?? null,
       rows: params.rows ?? null,
       mode: params.mode ?? "terminal",
+      worktree: params.worktree ?? null,
     }),
   killSession: (id: string) => invoke<void>("kill_session", { id }),
   removeSession: (id: string) => invoke<void>("remove_session", { id }),
@@ -225,6 +268,38 @@ export const api = {
     invoke<string>("chat_read_visual", { sessionId, file }),
   chatOpenVisual: (sessionId: string, file: string) =>
     invoke<void>("chat_open_visual", { sessionId, file }),
+
+  worktreeSuggestBranch: (params: {
+    projectId: string;
+    agent?: string | null;
+    title?: string | null;
+  }) =>
+    invoke<WorktreeSuggestBranchResult>("worktree_suggest_branch", {
+      projectId: params.projectId,
+      agent: params.agent ?? null,
+      title: params.title ?? null,
+    }),
+  worktreeBranches: (projectId: string) =>
+    invoke<WorktreeBranchesResult>("worktree_branches", { projectId }),
+  worktreeCreate: (params: {
+    projectId: string;
+    branch?: string | null;
+    base?: string | null;
+    agent?: string | null;
+    title?: string | null;
+  }) =>
+    invoke<WorktreeInfo>("worktree_create", {
+      projectId: params.projectId,
+      branch: params.branch ?? null,
+      base: params.base ?? null,
+      agent: params.agent ?? null,
+      title: params.title ?? null,
+    }),
+  worktreeList: (projectId: string) =>
+    invoke<WorktreeListItem[]>("worktree_list", { projectId }),
+  worktreeMerge: (id: string) => invoke<WorktreeInfo>("worktree_merge", { id }),
+  worktreeRemove: (id: string, confirmLoss: boolean) =>
+    invoke<void>("worktree_remove", { id, confirmLoss }),
 
   sessionInput: (id: string, dataB64: string) =>
     invoke<void>("session_input", { id, dataB64 }),

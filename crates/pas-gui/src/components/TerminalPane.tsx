@@ -2,20 +2,27 @@ import { useEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
-import { Columns2, Rows2, X } from "lucide-react";
+import { Columns2, GitBranch, Rows2, X } from "lucide-react";
 import {
   api,
   decodeBase64Bytes,
   encodeUtf8Base64,
   type SessionInfo,
+  type WorktreeInfo,
+  type WorktreeStatus,
 } from "../api/pas";
 import { es } from "../i18n/es";
 import type { SplitDir } from "../state/layout";
 import { statusDotClass } from "./Tabs";
+import {
+  WorktreeExitedStrip,
+  type WorktreeStripBusy,
+} from "./WorktreeExitedStrip";
 
 interface TerminalPaneProps {
   sessionId: string;
   session: SessionInfo | undefined;
+  worktreeStatus: WorktreeStatus | null;
   isFocused: boolean;
   isVisible: boolean;
   focusTick: number;
@@ -24,6 +31,8 @@ interface TerminalPaneProps {
   onClose: () => void;
   onRemoveExited: () => Promise<void>;
   onReopen: () => Promise<void>;
+  onRemoveWorktree: (worktree: WorktreeInfo) => Promise<void>;
+  onMergeAndRemoveWorktree: (worktree: WorktreeInfo) => Promise<void>;
 }
 
 function isPasShortcut(ev: KeyboardEvent): boolean {
@@ -60,6 +69,7 @@ function agentName(session: SessionInfo | undefined): string {
 export function TerminalPane({
   sessionId,
   session,
+  worktreeStatus,
   isFocused,
   isVisible,
   focusTick,
@@ -68,6 +78,8 @@ export function TerminalPane({
   onClose,
   onRemoveExited,
   onReopen,
+  onRemoveWorktree,
+  onMergeAndRemoveWorktree,
 }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -76,10 +88,16 @@ export function TerminalPane({
     cols: 120,
     rows: 40,
   });
-  const [busyAction, setBusyAction] = useState<"closing" | "reopening" | null>(null);
+  const [busyAction, setBusyAction] = useState<
+    "closing" | WorktreeStripBusy
+  >(null);
 
   const isExited = session?.state.state === "exited";
   const exitedCode = session?.state.state === "exited" ? session.state.code : null;
+  const activeWorktree =
+    session?.worktree && session.worktree.state !== "removed"
+      ? session.worktree
+      : null;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -288,6 +306,12 @@ export function TerminalPane({
             </span>
           </>
         )}
+        {session?.worktree?.branch && (
+          <span className="pas-br" title={session.worktree.branch}>
+            <GitBranch size={10} strokeWidth={2.2} />
+            <span>{session.worktree.branch}</span>
+          </span>
+        )}
         <span className="pas-spacer" />
         <span className="pas-pane-dims">
           {dims.cols}×{dims.rows}
@@ -335,7 +359,33 @@ export function TerminalPane({
         ref={hostRef}
         className={`pas-terminal-host${isExited ? " is-exited" : ""}`}
       />
-      {isExited && (
+      {isExited && activeWorktree ? (
+        <WorktreeExitedStrip
+          worktree={activeWorktree}
+          status={worktreeStatus}
+          busyAction={busyAction === "closing" ? "leaving" : busyAction}
+          onReopen={() => {
+            setBusyAction("reopening");
+            void onReopen().finally(() => setBusyAction(null));
+          }}
+          onLeave={() => {
+            setBusyAction("leaving");
+            void onRemoveExited().finally(() => setBusyAction(null));
+          }}
+          onRemoveOnly={() => {
+            setBusyAction("removing");
+            void onRemoveWorktree(activeWorktree).finally(() =>
+              setBusyAction(null),
+            );
+          }}
+          onMergeAndRemove={() => {
+            setBusyAction("merging");
+            void onMergeAndRemoveWorktree(activeWorktree).finally(() =>
+              setBusyAction(null),
+            );
+          }}
+        />
+      ) : isExited ? (
         <div
           className="pas-pane-exited-bar"
           role="status"
@@ -371,7 +421,7 @@ export function TerminalPane({
             {busyAction === "reopening" ? es.pane.reopening : es.pane.reopen}
           </button>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

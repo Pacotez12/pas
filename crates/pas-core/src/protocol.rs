@@ -49,6 +49,7 @@ pub const METHOD_WORKTREE_LIST: &str = "worktree.list";
 pub const METHOD_WORKTREE_MERGE: &str = "worktree.merge";
 pub const METHOD_WORKTREE_REMOVE: &str = "worktree.remove";
 pub const METHOD_WORKTREE_SUGGEST_BRANCH: &str = "worktree.suggest_branch";
+pub const METHOD_WORKTREE_BRANCHES: &str = "worktree.branches";
 
 pub const EVENT_SESSION_OUTPUT: &str = "session.output";
 pub const EVENT_SESSION_STATE: &str = "session.state";
@@ -679,4 +680,16 @@ pub struct WorktreeSuggestBranchResult {
     pub branch: String,
     pub base: String,
     pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeBranchesParams {
+    pub project_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeBranchesResult {
+    #[serde(default)]
+    pub current: Option<String>,
+    pub branches: Vec<String>,
 }

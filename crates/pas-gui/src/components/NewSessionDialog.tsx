@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { AlertCircle, Check, ChevronDown, FolderPlus } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, FolderPlus, GitBranch } from "lucide-react";
 import {
   api,
   type AccountInfo,
@@ -9,6 +9,8 @@ import {
   type ProjectInfo,
   type Quota,
   type SessionMode,
+  type WorktreeInfo,
+  type WorktreeRequest,
 } from "../api/pas";
 import { es } from "../i18n/es";
 import { filterAccountsByAgent, formatQuotaInline } from "../state/accounts";
@@ -20,6 +22,7 @@ import {
   splitCommandString,
   type AgentPreset,
 } from "../state/sessionCommand";
+import { computeWorktreePreviewPath } from "../state/worktree";
 
 const MONTHS_ES = [
   "ene",
@@ -57,6 +60,7 @@ export interface NewSessionFormResult {
   title: string | null;
   cwd: string;
   mode: SessionMode;
+  worktree: WorktreeRequest | null;
   openInSplit: boolean;
   splitDir: SplitDir;
 }
@@ -68,6 +72,7 @@ interface NewSessionDialogProps {
   quotasByAccountId: Map<string, Quota | null>;
   defaultProjectId: string | null;
   defaultAccountId?: string | null;
+  existingWorktree?: WorktreeInfo | null;
   selectedProjectIdOverride: string | null;
   onConsumeProjectIdOverride: () => void;
   onRequestAddProject: () => void;
@@ -91,6 +96,7 @@ export function NewSessionDialog({
   quotasByAccountId,
   defaultProjectId,
   defaultAccountId = null,
+  existingWorktree = null,
   selectedProjectIdOverride,
   onConsumeProjectIdOverride,
   onRequestAddProject,
@@ -105,6 +111,16 @@ export function NewSessionDialog({
   const [projectId, setProjectId] = useState<string>("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [agent, setAgent] = useState<AgentPreset>("claude");
+  const [folderMode, setFolderMode] = useState<"main" | "worktree">("main");
+  const [wtBranch, setWtBranch] = useState("");
+  const [wtBranchTouched, setWtBranchTouched] = useState(false);
+  const [wtBase, setWtBase] = useState("");
+  const [wtBaseTouched, setWtBaseTouched] = useState(false);
+  const [wtBranches, setWtBranches] = useState<string[]>([]);
+  const [baseDropdownOpen, setBaseDropdownOpen] = useState(false);
+  const [wtSuggestedBranch, setWtSuggestedBranch] = useState("");
+  const [wtSuggestedPath, setWtSuggestedPath] = useState("");
+  const [wtLoadingSuggest, setWtLoadingSuggest] = useState(false);
   const [accountId, setAccountId] = useState<string | null>(null);
   const [accountDropdownOpen, setAccountDropdownOpen] = useState(false);
   const [customCmd, setCustomCmd] = useState("");
@@ -128,6 +144,7 @@ export function NewSessionDialog({
   const selectWrapRef = useRef<HTMLDivElement | null>(null);
   const accountSelectWrapRef = useRef<HTMLDivElement | null>(null);
   const convSelectWrapRef = useRef<HTMLDivElement | null>(null);
+  const baseSelectWrapRef = useRef<HTMLDivElement | null>(null);
   const wasOpenRef = useRef(false);
 
   useEffect(() => {
@@ -139,9 +156,11 @@ export function NewSessionDialog({
     wasOpenRef.current = true;
 
     const initialProject =
-      defaultProjectId && projects.some((p) => p.id === defaultProjectId)
-        ? defaultProjectId
-        : projects[0]?.id ?? "";
+      existingWorktree && projects.some((p) => p.id === existingWorktree.project_id)
+        ? existingWorktree.project_id
+        : defaultProjectId && projects.some((p) => p.id === defaultProjectId)
+          ? defaultProjectId
+          : projects[0]?.id ?? "";
     const claudeAccounts = filterAccountsByAgent(accounts, "claude");
     const initialAccount =
       defaultAccountId && claudeAccounts.some((a) => a.id === defaultAccountId)
@@ -154,6 +173,16 @@ export function NewSessionDialog({
     setAccountDropdownOpen(false);
     setConvDropdownOpen(false);
     setAgent("claude");
+    setFolderMode("main");
+    setWtBranch("");
+    setWtBranchTouched(false);
+    setWtBase("");
+    setWtBaseTouched(false);
+    setWtBranches([]);
+    setBaseDropdownOpen(false);
+    setWtSuggestedBranch("");
+    setWtSuggestedPath("");
+    setWtLoadingSuggest(false);
     setAccountId(initialAccount);
     setCustomCmd("");
     setCustomCwd("");
@@ -189,6 +218,7 @@ export function NewSessionDialog({
     accounts,
     defaultProjectId,
     defaultAccountId,
+    existingWorktree,
     canSplit,
     defaultOpenInSplit,
   ]);
@@ -203,10 +233,99 @@ export function NewSessionDialog({
   }, [open, selectedProjectIdOverride, projects, onConsumeProjectIdOverride]);
 
   const selectedProject = projects.find((p) => p.id === projectId) ?? null;
-  const effectiveCwd = selectedProject ? selectedProject.path : customCwd.trim();
+  const effectiveCwd = existingWorktree
+    ? existingWorktree.path
+    : selectedProject
+      ? selectedProject.path
+      : customCwd.trim();
   const agentAccounts = filterAccountsByAgent(accounts, agent);
   const selectedAccount =
     agentAccounts.find((a) => a.id === accountId) ?? null;
+
+  useEffect(() => {
+    if (!selectedProject && folderMode === "worktree") {
+      setFolderMode("main");
+    }
+  }, [selectedProject, folderMode]);
+
+  useEffect(() => {
+    if (!open || existingWorktree || !selectedProject || folderMode !== "worktree") {
+      return;
+    }
+    let cancelled = false;
+    void api
+      .worktreeBranches(selectedProject.id)
+      .then((res) => {
+        if (cancelled) return;
+        setWtBranches(res.branches);
+        if (!wtBaseTouched && res.current) {
+          setWtBase(res.current);
+        } else if (!wtBaseTouched && !res.current && res.branches[0]) {
+          setWtBase(res.branches[0]);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setWtBranches([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, existingWorktree, selectedProject, folderMode, wtBaseTouched]);
+
+  useEffect(() => {
+    if (!open || existingWorktree || !selectedProject || folderMode !== "worktree") {
+      return;
+    }
+    let cancelled = false;
+    setWtLoadingSuggest(true);
+    const agentForSuggest =
+      agent === "custom" ? splitCommandString(customCmd)[0] || null : agent;
+    const titleForSuggest = titleTouched ? title.trim() || null : null;
+
+    void api
+      .worktreeSuggestBranch({
+        projectId: selectedProject.id,
+        agent: agentForSuggest,
+        title: titleForSuggest,
+      })
+      .then((res) => {
+        if (cancelled) return;
+        setWtSuggestedBranch(res.branch);
+        setWtSuggestedPath(res.path);
+        if (!wtBranchTouched) {
+          setWtBranch(res.branch);
+        }
+        if (!wtBaseTouched) {
+          setWtBase(res.base);
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setWtSuggestedPath("");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setWtLoadingSuggest(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    open,
+    existingWorktree,
+    selectedProject,
+    folderMode,
+    agent,
+    customCmd,
+    title,
+    titleTouched,
+    wtBranchTouched,
+    wtBaseTouched,
+  ]);
 
   useEffect(() => {
     if (!open || mode !== "terminal" || agent !== "claude") return;
@@ -254,7 +373,8 @@ export function NewSessionDialog({
 
   useEffect(() => {
     if (!open || suppressed) return;
-    const anyDropdownOpen = dropdownOpen || accountDropdownOpen || convDropdownOpen;
+    const anyDropdownOpen =
+      dropdownOpen || accountDropdownOpen || convDropdownOpen || baseDropdownOpen;
     const onKey = (e: KeyboardEvent) => {
       const action = resolveDialogKey(e.key, anyDropdownOpen);
       if (action === "close-dropdown") {
@@ -263,6 +383,7 @@ export function NewSessionDialog({
         setDropdownOpen(false);
         setAccountDropdownOpen(false);
         setConvDropdownOpen(false);
+        setBaseDropdownOpen(false);
       } else if (action === "close-dialog") {
         e.preventDefault();
         e.stopPropagation();
@@ -271,10 +392,18 @@ export function NewSessionDialog({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, suppressed, dropdownOpen, accountDropdownOpen, convDropdownOpen, onClose]);
+  }, [
+    open,
+    suppressed,
+    dropdownOpen,
+    accountDropdownOpen,
+    convDropdownOpen,
+    baseDropdownOpen,
+    onClose,
+  ]);
 
   useEffect(() => {
-    if (!dropdownOpen && !accountDropdownOpen && !convDropdownOpen) return;
+    if (!dropdownOpen && !accountDropdownOpen && !convDropdownOpen && !baseDropdownOpen) return;
     const onMouseDown = (e: MouseEvent) => {
       const target = e.target as Node;
       if (dropdownOpen && selectWrapRef.current && !selectWrapRef.current.contains(target)) {
@@ -294,10 +423,17 @@ export function NewSessionDialog({
       ) {
         setConvDropdownOpen(false);
       }
+      if (
+        baseDropdownOpen &&
+        baseSelectWrapRef.current &&
+        !baseSelectWrapRef.current.contains(target)
+      ) {
+        setBaseDropdownOpen(false);
+      }
     };
     window.addEventListener("mousedown", onMouseDown);
     return () => window.removeEventListener("mousedown", onMouseDown);
-  }, [dropdownOpen, accountDropdownOpen, convDropdownOpen]);
+  }, [dropdownOpen, accountDropdownOpen, convDropdownOpen, baseDropdownOpen]);
 
   if (!open) return null;
 
@@ -346,11 +482,23 @@ export function NewSessionDialog({
       return;
     }
 
-    const cwd = selectedProject ? selectedProject.path : customCwd.trim();
+    const cwd = existingWorktree
+      ? existingWorktree.path
+      : selectedProject
+        ? selectedProject.path
+        : customCwd.trim();
     if (!cwd) {
       setError(es.newSessionDialog.errorNoCwd);
       return;
     }
+
+    const worktree: WorktreeRequest | null =
+      !existingWorktree && selectedProject && folderMode === "worktree"
+        ? {
+            branch: wtBranch.trim() || null,
+            base: wtBase.trim() || null,
+          }
+        : null;
 
     setSubmitting(true);
     try {
@@ -361,6 +509,7 @@ export function NewSessionDialog({
         title: title.trim() || null,
         cwd,
         mode,
+        worktree,
         openInSplit: canSplit && openInSplit,
         splitDir: defaultSplitDir,
       });
@@ -690,7 +839,159 @@ export function NewSessionDialog({
           </div>
         )}
 
-        {mode === "terminal" && agent === "claude" && (
+        {existingWorktree && (
+          <div className="pas-field">
+            <label>{es.newSessionDialog.folderLabel}</label>
+            <div className="pas-input" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span className="pas-br">
+                <GitBranch size={10} strokeWidth={2.2} />
+                <span>{existingWorktree.branch}</span>
+              </span>
+              <span className="pas-wt-path" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {shortenPath(existingWorktree.path)}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {!existingWorktree && selectedProject && (
+          <>
+            <div className="pas-field">
+              <label>{es.newSessionDialog.folderLabel}</label>
+              <div
+                className="pas-seg"
+                role="radiogroup"
+                aria-label={es.newSessionDialog.folderLabel}
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={folderMode === "main"}
+                  className={`pas-seg-btn${folderMode === "main" ? " is-active" : ""}`}
+                  onClick={() => {
+                    setFolderMode("main");
+                    setError(null);
+                  }}
+                >
+                  {es.newSessionDialog.folderMainRepo}
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={folderMode === "worktree"}
+                  className={`pas-seg-btn${folderMode === "worktree" ? " is-active" : ""}`}
+                  onClick={() => {
+                    setFolderMode("worktree");
+                    setError(null);
+                  }}
+                >
+                  {es.newSessionDialog.folderNewWorktree}
+                </button>
+              </div>
+            </div>
+
+            {folderMode === "worktree" && (
+              <>
+                <div className="pas-wt-row">
+                  <div className="pas-field pas-wt-col-branch">
+                    <label htmlFor="ns-wt-branch">
+                      {es.newSessionDialog.branchNewLabel}
+                    </label>
+                    <input
+                      id="ns-wt-branch"
+                      className="pas-input pas-input-mono"
+                      type="text"
+                      value={wtBranch}
+                      placeholder={es.newSessionDialog.branchPlaceholder}
+                      onChange={(e) => {
+                        setWtBranchTouched(true);
+                        setWtBranch(e.target.value);
+                      }}
+                    />
+                  </div>
+                  <div className="pas-field pas-wt-col-base">
+                    <label id="ns-wt-base-label">
+                      {es.newSessionDialog.baseBranchLabel}
+                    </label>
+                    <div ref={baseSelectWrapRef} className="pas-select-wrap">
+                      <button
+                        id="ns-wt-base"
+                        type="button"
+                        role="combobox"
+                        aria-labelledby="ns-wt-base-label"
+                        aria-expanded={baseDropdownOpen}
+                        aria-haspopup="listbox"
+                        className="pas-select-trigger"
+                        disabled={wtBranches.length === 0 && !wtBase}
+                        onClick={() => {
+                          setDropdownOpen(false);
+                          setAccountDropdownOpen(false);
+                          setConvDropdownOpen(false);
+                          setBaseDropdownOpen((v) => !v);
+                        }}
+                      >
+                        <span className="pas-select-label">
+                          {wtBase || es.newSessionDialog.baseBranchPlaceholder}
+                        </span>
+                        <ChevronDown size={14} className="pas-select-chevron" />
+                      </button>
+
+                      {baseDropdownOpen && wtBranches.length > 0 && (
+                        <div className="pas-select-menu" role="listbox">
+                          {wtBranches.map((br) => {
+                            const isSelected = br === wtBase;
+                            return (
+                              <button
+                                key={br}
+                                type="button"
+                                role="option"
+                                aria-selected={isSelected}
+                                className={`pas-select-option${isSelected ? " is-selected" : ""}`}
+                                onClick={() => {
+                                  setWtBaseTouched(true);
+                                  setWtBase(br);
+                                  setBaseDropdownOpen(false);
+                                }}
+                              >
+                                <span className="pas-select-option-text">{br}</span>
+                                {isSelected && (
+                                  <Check
+                                    size={13}
+                                    style={{ color: "var(--acc)", flex: "none" }}
+                                  />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="pas-wt-hint">
+                  {wtLoadingSuggest && !wtSuggestedPath ? (
+                    es.newSessionDialog.worktreeLoadingSuggestion
+                  ) : wtSuggestedPath ? (
+                    <>
+                      {es.newSessionDialog.worktreeDestinationHint}{" "}
+                      <span className="pas-wt-path">
+                        {shortenPath(
+                          computeWorktreePreviewPath(
+                            wtSuggestedPath,
+                            wtSuggestedBranch,
+                            wtBranch,
+                          ),
+                        )}
+                      </span>
+                    </>
+                  ) : null}
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        {mode === "terminal" && agent === "claude" && folderMode === "main" && (
           <div className="pas-field">
             <label id="ns-conv-label">{es.newSessionDialog.conversationLabel}</label>
             <div ref={convSelectWrapRef} className="pas-select-wrap">

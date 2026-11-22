@@ -5,8 +5,9 @@ use std::process::Command;
 use pas_core::protocol::{
     ERR_INVALID_PARAMS, ERR_WORKTREE_BRANCH_EXISTS, ERR_WORKTREE_CONFIRM_REQUIRED,
     ERR_WORKTREE_DIRTY_MAIN, ERR_WORKTREE_GIT_FAILED, ERR_WORKTREE_MERGE_CONFLICT,
-    ERR_WORKTREE_WRONG_BASE, RpcError, WorktreeCreateParams, WorktreeInfo, WorktreeListItem,
-    WorktreeState, WorktreeStatus, WorktreeSuggestBranchParams, WorktreeSuggestBranchResult,
+    ERR_WORKTREE_WRONG_BASE, RpcError, WorktreeBranchesResult, WorktreeCreateParams, WorktreeInfo,
+    WorktreeListItem, WorktreeState, WorktreeStatus, WorktreeSuggestBranchParams,
+    WorktreeSuggestBranchResult,
 };
 
 use crate::rpc::store_error_to_rpc;
@@ -140,6 +141,34 @@ pub fn suggest_branch(
     let (branch, path) =
         pick_unique_branch_and_path(&project.path, worktrees_dir, &project.name, &prefix);
     Ok(WorktreeSuggestBranchResult { branch, base, path })
+}
+
+pub fn list_branches(
+    store: &Store,
+    project_id: &str,
+) -> Result<WorktreeBranchesResult, WorktreeError> {
+    let project = store.get_project(project_id)?;
+    let current = current_branch(&project.path).ok();
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&project.path)
+        .args(["for-each-ref", "--format=%(refname:short)", "refs/heads"])
+        .output()?;
+    if !out.status.success() {
+        return Err(WorktreeError::GitFailed {
+            action: "for-each-ref",
+            detail: git_error_detail(&out),
+        });
+    }
+    let mut branches: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    branches.sort();
+    branches.dedup();
+    Ok(WorktreeBranchesResult { current, branches })
 }
 
 pub fn create(

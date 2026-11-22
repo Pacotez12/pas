@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Columns2,
   ExternalLink,
+  GitBranch,
   Rows2,
   Square,
   X,
@@ -16,6 +17,8 @@ import {
   type ChatEvent,
   type PermissionChoice,
   type SessionInfo,
+  type WorktreeInfo,
+  type WorktreeStatus,
 } from "../api/pas";
 import { es } from "../i18n/es";
 import {
@@ -28,11 +31,16 @@ import {
 } from "../state/chat";
 import type { SplitDir } from "../state/layout";
 import { statusDotClass } from "./Tabs";
+import {
+  WorktreeExitedStrip,
+  type WorktreeStripBusy,
+} from "./WorktreeExitedStrip";
 
 interface ChatPaneProps {
   sessionId: string;
   session: SessionInfo | undefined;
   account: AccountInfo | undefined;
+  worktreeStatus: WorktreeStatus | null;
   isFocused: boolean;
   isVisible: boolean;
   focusTick: number;
@@ -42,6 +50,8 @@ interface ChatPaneProps {
   onOpenInTerminal: (session: SessionInfo, command: string[]) => Promise<void>;
   onRemoveExited: () => Promise<void>;
   onReopen: () => Promise<void>;
+  onRemoveWorktree: (worktree: WorktreeInfo) => Promise<void>;
+  onMergeAndRemoveWorktree: (worktree: WorktreeInfo) => Promise<void>;
 }
 
 function shortenPath(path: string): string {
@@ -308,6 +318,7 @@ export function ChatPane({
   sessionId,
   session,
   account,
+  worktreeStatus,
   isFocused,
   isVisible,
   focusTick,
@@ -317,6 +328,8 @@ export function ChatPane({
   onOpenInTerminal,
   onRemoveExited,
   onReopen,
+  onRemoveWorktree,
+  onMergeAndRemoveWorktree,
 }: ChatPaneProps) {
   const [timeline, setTimeline] = useState<ChatTimelineState>(() =>
     createInitialChatState(),
@@ -328,9 +341,9 @@ export function ChatPane({
   const [terminalCmd, setTerminalCmd] = useState<string[] | null>(null);
   const [openingTerminal, setOpeningTerminal] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
-  const [busyAction, setBusyAction] = useState<"closing" | "reopening" | null>(
-    null,
-  );
+  const [busyAction, setBusyAction] = useState<
+    "closing" | WorktreeStripBusy
+  >(null);
 
   const feedRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -341,6 +354,10 @@ export function ChatPane({
   const isExited = stateKind === "exited";
   const exitedCode =
     session?.state.state === "exited" ? session.state.code : null;
+  const activeWorktree =
+    session?.worktree && session.worktree.state !== "removed"
+      ? session.worktree
+      : null;
 
   useEffect(() => {
     let disposed = false;
@@ -531,6 +548,12 @@ export function ChatPane({
             </span>
           </>
         )}
+        {session?.worktree?.branch && (
+          <span className="pas-br" title={session.worktree.branch}>
+            <GitBranch size={10} strokeWidth={2.2} />
+            <span>{session.worktree.branch}</span>
+          </span>
+        )}
         <span className="pas-spacer" />
         {terminalCmd && session && (
           <button
@@ -675,7 +698,33 @@ export function ChatPane({
         </div>
       )}
 
-      {isExited ? (
+      {isExited && activeWorktree ? (
+        <WorktreeExitedStrip
+          worktree={activeWorktree}
+          status={worktreeStatus}
+          busyAction={busyAction === "closing" ? "leaving" : busyAction}
+          onReopen={() => {
+            setBusyAction("reopening");
+            void onReopen().finally(() => setBusyAction(null));
+          }}
+          onLeave={() => {
+            setBusyAction("leaving");
+            void onRemoveExited().finally(() => setBusyAction(null));
+          }}
+          onRemoveOnly={() => {
+            setBusyAction("removing");
+            void onRemoveWorktree(activeWorktree).finally(() =>
+              setBusyAction(null),
+            );
+          }}
+          onMergeAndRemove={() => {
+            setBusyAction("merging");
+            void onMergeAndRemoveWorktree(activeWorktree).finally(() =>
+              setBusyAction(null),
+            );
+          }}
+        />
+      ) : isExited ? (
         <div
           className="pas-pane-exited-bar"
           role="status"

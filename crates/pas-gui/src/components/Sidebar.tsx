@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
   Folder,
+  GitBranch,
   Plus,
 } from "lucide-react";
 import type {
@@ -29,6 +30,7 @@ interface SidebarProps {
   onCreateGroupAndMove: (project: ProjectInfo) => void;
   onUnpinProject: (projectId: string) => void;
   onRemoveProject: (project: ProjectInfo) => void;
+  onOpenWorktrees: (project: ProjectInfo) => void;
   onRenameGroup: (group: GroupInfo) => void;
 }
 
@@ -82,6 +84,7 @@ export function Sidebar({
   onCreateGroupAndMove,
   onUnpinProject,
   onRemoveProject,
+  onOpenWorktrees,
   onRenameGroup,
 }: SidebarProps) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -161,6 +164,7 @@ export function Sidebar({
     }
     metaParts.push(stateLabel);
     const metaText = metaParts.join(" · ");
+    const branch = session.worktree?.branch ?? null;
     return (
       <button
         key={session.id}
@@ -174,7 +178,16 @@ export function Sidebar({
           <span className="pas-ses-title" style={{ display: "block" }}>
             {session.title}
           </span>
-          <small className="pas-ses-meta">{metaText}</small>
+          <small className="pas-ses-meta">
+            {branch ? (
+              <span className="pas-br" title={branch}>
+                <GitBranch size={10} strokeWidth={2.2} />
+                <span>{branch}</span>
+              </span>
+            ) : (
+              metaText
+            )}
+          </small>
         </span>
       </button>
     );
@@ -394,6 +407,22 @@ export function Sidebar({
           style={{ left: repoMenuPos.left, top: repoMenuPos.top }}
           onMouseDown={(e) => e.stopPropagation()}
         >
+          <button
+            type="button"
+            role="menuitem"
+            className="pas-menu-item"
+            onMouseEnter={() =>
+              setRepoMenu((cur) => (cur ? { ...cur, showMoveSubmenu: false } : null))
+            }
+            onClick={() => {
+              const target = repoMenu.project;
+              setRepoMenu(null);
+              onOpenWorktrees(target);
+            }}
+          >
+            {es.contextMenu.worktrees}
+          </button>
+
           <button
             type="button"
             role="menuitem"

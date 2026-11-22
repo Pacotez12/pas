@@ -4,8 +4,8 @@ use std::path::{Component, Path, PathBuf};
 use pas_core::protocol::{
     AccountInfo, AccountQuota, AcpAdapterStatus, AgentKind, ChatEvent, ClaudeConversation,
     CreateParams, CreateResult, GroupInfo, Mode, PermissionChoice, ProjectInfo, SessionInfo,
-    SnapshotResult, WorktreeCreateParams, WorktreeInfo, WorktreeListItem, WorktreeRequest,
-    WorktreeSuggestBranchParams, WorktreeSuggestBranchResult,
+    SnapshotResult, WorktreeBranchesResult, WorktreeCreateParams, WorktreeInfo, WorktreeListItem,
+    WorktreeRequest, WorktreeSuggestBranchParams, WorktreeSuggestBranchResult,
 };
 use tauri::State;
 
@@ -287,6 +287,17 @@ pub async fn worktree_suggest_branch(
             agent,
             title,
         })
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn worktree_branches(
+    bridge: State<'_, Bridge>,
+    project_id: String,
+) -> Result<WorktreeBranchesResult, String> {
+    bridge
+        .worktree_branches(project_id)
         .await
         .map_err(|e| e.to_string())
 }

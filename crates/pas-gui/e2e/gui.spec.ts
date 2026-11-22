@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   E2EContext,
+  FAKE_AGENT_BIN,
   PAS_CLI_BIN,
   addProjectViaUi,
   openFakeAgentSessionViaUi,
@@ -621,6 +622,271 @@ describe("pas-gui e2e", () => {
           timeout: 15_000,
           interval: 100,
           timeoutMsg: "Al reabrir la app el historial del chat no se restauró igual y sin duplicados.",
+        },
+      );
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  it("abre sesión en worktree, commitea, termina, mergea y borra el worktree", async () => {
+    const ctx = new E2EContext();
+    try {
+      const repoPath = path.join(ctx.tmpDir, "proyecto-wt-merge");
+      fs.mkdirSync(repoPath, { recursive: true });
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repoPath });
+      execFileSync("git", ["config", "user.name", "Test"], { cwd: repoPath });
+      execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repoPath });
+      fs.writeFileSync(path.join(repoPath, "README.md"), "inicial\n", "utf8");
+      execFileSync("git", ["add", "README.md"], { cwd: repoPath });
+      execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: repoPath });
+      execFileSync("git", ["branch", "develop"], { cwd: repoPath });
+
+      await ctx.startPasd();
+      const browser = await ctx.openApp();
+
+      await addProjectViaUi(browser, repoPath);
+
+      await browser.$(".pas-new-btn").click();
+      await browser.$(".pas-dialog-card").waitForDisplayed({ timeout: 10_000 });
+
+      const radios = await browser.$$('.pas-dialog-card button[role="radio"]');
+      for (const radio of radios) {
+        const label = (await radio.getText()).trim();
+        if (label.startsWith("Comando")) {
+          await radio.click();
+          break;
+        }
+      }
+      const cmdInput = await browser.$("#ns-cmd");
+      await cmdInput.waitForDisplayed({ timeout: 10_000 });
+      await cmdInput.setValue(FAKE_AGENT_BIN);
+
+      const folderRadios = await browser.$$('.pas-dialog-card button[role="radio"]');
+      for (const radio of folderRadios) {
+        const label = (await radio.getText()).trim();
+        if (label === "Worktree nuevo") {
+          await radio.click();
+          break;
+        }
+      }
+
+      const branchInput = await browser.$("#ns-wt-branch");
+      await branchInput.waitForDisplayed({ timeout: 10_000 });
+      await browser.waitUntil(
+        async () => (await branchInput.getValue()).trim().length > 0,
+        { timeout: 10_000, timeoutMsg: "No se sugirió el nombre de rama del worktree." },
+      );
+      const baseTrigger = await browser.$("#ns-wt-base");
+      await browser.waitUntil(
+        async () => (await readTextContent(browser, "#ns-wt-base")).trim() === "main",
+        { timeout: 10_000, timeoutMsg: "El selector Desde no preseleccionó main." },
+      );
+      await baseTrigger.click();
+      await browser.waitUntil(
+        async () => {
+          const menuText = await readTextContent(browser, ".pas-wt-col-base .pas-select-menu");
+          return menuText.includes("main") && menuText.includes("develop");
+        },
+        { timeout: 5_000, timeoutMsg: "El desplegable Desde no listó las ramas locales." },
+      );
+      await baseTrigger.click();
+      await branchInput.setValue("pas/e2e-merge");
+
+      await browser.$('.pas-dialog-card button[type="submit"]').click();
+      await browser.waitUntil(
+        async () =>
+          browser.execute(() => document.querySelector(".pas-dialog-backdrop") === null),
+        { timeout: 10_000, interval: 50 },
+      );
+
+      await waitForPaneText(browser, 0, "fake-agent listo");
+
+      await browser.waitUntil(
+        async () => {
+          const sideBr = await readTextContent(browser, ".pas-sidebar .pas-br");
+          const paneBr = await readTextContent(browser, ".pas-pane-header .pas-br");
+          return sideBr.includes("pas/e2e-merge") && paneBr.includes("pas/e2e-merge");
+        },
+        {
+          timeout: 10_000,
+          timeoutMsg: "La rama del worktree no apareció en la sidebar y en el encabezado del panel.",
+        },
+      );
+
+      const wtPath = path.join(ctx.pasDataDir, "worktrees", "proyecto-wt-merge", "pas-e2e-merge");
+      expect(fs.existsSync(wtPath)).toBe(true);
+
+      fs.writeFileSync(path.join(wtPath, "feature.txt"), "hecho en worktree\n", "utf8");
+      execFileSync("git", ["add", "feature.txt"], { cwd: wtPath });
+      execFileSync("git", ["commit", "-q", "-m", "feat: e2e"], { cwd: wtPath });
+
+      await typeLineInPane(browser, 0, "exit 0");
+
+      await browser.waitUntil(
+        async () => {
+          const strip = await readTextContent(browser, ".pas-pane-exited-bar.is-worktree");
+          return (
+            strip.includes("1 commit que no está en main") &&
+            strip.includes("Mergear y borrar")
+          );
+        },
+        {
+          timeout: 15_000,
+          interval: 100,
+          timeoutMsg: "No apareció la franja de worktree terminado con el resumen de la rama.",
+        },
+      );
+
+      const stripButtons = await browser.$$(".pas-pane-exited-bar.is-worktree button");
+      let clickedMergeAndRemove = false;
+      for (const btn of stripButtons) {
+        if ((await btn.getText()).trim() === "Mergear y borrar") {
+          await btn.click();
+          clickedMergeAndRemove = true;
+          break;
+        }
+      }
+      expect(clickedMergeAndRemove).toBe(true);
+
+      await browser.waitUntil(
+        async () =>
+          !fs.existsSync(wtPath) &&
+          fs.existsSync(path.join(repoPath, "feature.txt")),
+        {
+          timeout: 15_000,
+          interval: 100,
+          timeoutMsg: "Mergear y borrar no mergeó el archivo al repo principal ni borró el worktree.",
+        },
+      );
+
+      const branches = execFileSync("git", ["branch", "--list", "pas/e2e-merge"], {
+        cwd: repoPath,
+        encoding: "utf8",
+      }).trim();
+      expect(branches).toBe("");
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  it("borrar worktree con cambios sin commitear pide confirmación con casilla obligatoria", async () => {
+    const ctx = new E2EContext();
+    try {
+      const repoPath = path.join(ctx.tmpDir, "proyecto-wt-loss");
+      fs.mkdirSync(repoPath, { recursive: true });
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repoPath });
+      execFileSync("git", ["config", "user.name", "Test"], { cwd: repoPath });
+      execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repoPath });
+      fs.writeFileSync(path.join(repoPath, "README.md"), "inicial\n", "utf8");
+      execFileSync("git", ["add", "README.md"], { cwd: repoPath });
+      execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: repoPath });
+      execFileSync("git", ["branch", "develop"], { cwd: repoPath });
+
+      await ctx.startPasd();
+      const browser = await ctx.openApp();
+
+      await addProjectViaUi(browser, repoPath);
+
+      await browser.$(".pas-new-btn").click();
+      await browser.$(".pas-dialog-card").waitForDisplayed({ timeout: 10_000 });
+
+      const radios = await browser.$$('.pas-dialog-card button[role="radio"]');
+      for (const radio of radios) {
+        if ((await radio.getText()).trim().startsWith("Comando")) {
+          await radio.click();
+          break;
+        }
+      }
+      const cmdInput = await browser.$("#ns-cmd");
+      await cmdInput.waitForDisplayed({ timeout: 10_000 });
+      await cmdInput.setValue(FAKE_AGENT_BIN);
+
+      const folderRadios = await browser.$$('.pas-dialog-card button[role="radio"]');
+      for (const radio of folderRadios) {
+        if ((await radio.getText()).trim() === "Worktree nuevo") {
+          await radio.click();
+          break;
+        }
+      }
+
+      const branchInput = await browser.$("#ns-wt-branch");
+      await branchInput.waitForDisplayed({ timeout: 10_000 });
+      await browser.waitUntil(
+        async () => (await branchInput.getValue()).trim().length > 0,
+        { timeout: 10_000 },
+      );
+      await branchInput.setValue("pas/e2e-loss");
+
+      await browser.$('.pas-dialog-card button[type="submit"]').click();
+      await browser.waitUntil(
+        async () =>
+          browser.execute(() => document.querySelector(".pas-dialog-backdrop") === null),
+        { timeout: 10_000, interval: 50 },
+      );
+
+      await waitForPaneText(browser, 0, "fake-agent listo");
+
+      const wtPath = path.join(ctx.pasDataDir, "worktrees", "proyecto-wt-loss", "pas-e2e-loss");
+      expect(fs.existsSync(wtPath)).toBe(true);
+      fs.writeFileSync(path.join(wtPath, "pendiente.txt"), "sin commitear\n", "utf8");
+
+      await typeLineInPane(browser, 0, "exit 0");
+
+      await browser.waitUntil(
+        async () => {
+          const strip = await readTextContent(browser, ".pas-pane-exited-bar.is-worktree");
+          return (
+            strip.includes("1 archivo sin commitear") &&
+            strip.includes("Solo borrar")
+          );
+        },
+        {
+          timeout: 15_000,
+          interval: 100,
+          timeoutMsg: "No apareció la franja de worktree con 1 archivo sin commitear.",
+        },
+      );
+
+      const stripButtons = await browser.$$(".pas-pane-exited-bar.is-worktree button");
+      for (const btn of stripButtons) {
+        if ((await btn.getText()).trim() === "Solo borrar") {
+          const cls = (await btn.getAttribute("class")) ?? "";
+          expect(cls).not.toContain("is-primary");
+          await btn.click();
+          break;
+        }
+      }
+
+      const confirmDialog = await browser.$('[data-dialog="worktree-confirm-remove"]');
+      await confirmDialog.waitForDisplayed({ timeout: 10_000 });
+
+      const dialogText = await readTextContent(browser, '[data-dialog="worktree-confirm-remove"]');
+      expect(dialogText).toContain("Borrar el worktree pas/e2e-loss");
+      expect(dialogText).toContain("pendiente.txt");
+
+      const dangerBtn = await browser.$('[data-dialog="worktree-confirm-remove"] button.is-danger');
+      expect(await dangerBtn.isEnabled()).toBe(false);
+      expect(fs.existsSync(wtPath)).toBe(true);
+
+      await browser.$("#wt-confirm-loss").click();
+      await browser.waitUntil(async () => dangerBtn.isEnabled(), {
+        timeout: 5_000,
+        timeoutMsg: "Borrar igual no se habilitó tras marcar la casilla.",
+      });
+
+      await dangerBtn.click();
+
+      await browser.waitUntil(
+        async () =>
+          !fs.existsSync(wtPath) &&
+          (await browser.execute(
+            () => document.querySelector('[data-dialog="worktree-confirm-remove"]') === null,
+          )),
+        {
+          timeout: 15_000,
+          interval: 100,
+          timeoutMsg: "El worktree no se borró tras confirmar con la casilla.",
         },
       );
     } finally {

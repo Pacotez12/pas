@@ -19,11 +19,12 @@ use pas_core::protocol::{
     METHOD_QUOTA_REPORT, METHOD_SESSION_CREATE, METHOD_SESSION_HOOK, METHOD_SESSION_INPUT,
     METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_REMOVE,
     METHOD_SESSION_RESIZE, METHOD_SESSION_SEND, METHOD_SESSION_SNAPSHOT, METHOD_SESSION_WAIT,
-    METHOD_WORKTREE_CREATE, METHOD_WORKTREE_LIST, METHOD_WORKTREE_MERGE, METHOD_WORKTREE_REMOVE,
-    METHOD_WORKTREE_SUGGEST_BRANCH, PingResult, ProjectAddParams, ProjectMoveParams,
-    ProjectRenameParams, QuotaReportParams, ReadParams, ReadResult, Request, ResizeParams,
-    Response, RpcError, SendParams, SnapshotResult, WaitParams, WorktreeCreateParams,
-    WorktreeListParams, WorktreeRemoveParams, WorktreeSuggestBranchParams,
+    METHOD_WORKTREE_BRANCHES, METHOD_WORKTREE_CREATE, METHOD_WORKTREE_LIST, METHOD_WORKTREE_MERGE,
+    METHOD_WORKTREE_REMOVE, METHOD_WORKTREE_SUGGEST_BRANCH, PingResult, ProjectAddParams,
+    ProjectMoveParams, ProjectRenameParams, QuotaReportParams, ReadParams, ReadResult, Request,
+    ResizeParams, Response, RpcError, SendParams, SnapshotResult, WaitParams,
+    WorktreeBranchesParams, WorktreeCreateParams, WorktreeListParams, WorktreeRemoveParams,
+    WorktreeSuggestBranchParams,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -294,6 +295,12 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
             let params: WorktreeSuggestBranchParams = parse_params(req.params)?;
             let wt_dir = mgr.worktrees_dir();
             let res = worktree::suggest_branch(mgr.store(), wt_dir.as_deref(), params)
+                .map_err(worktree::worktree_error_to_rpc)?;
+            ok_json(res)
+        }
+        METHOD_WORKTREE_BRANCHES => {
+            let params: WorktreeBranchesParams = parse_params(req.params)?;
+            let res = worktree::list_branches(mgr.store(), &params.project_id)
                 .map_err(worktree::worktree_error_to_rpc)?;
             ok_json(res)
         }

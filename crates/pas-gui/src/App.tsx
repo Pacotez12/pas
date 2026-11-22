@@ -10,6 +10,9 @@ import {
   type ProjectInfo,
   type Quota,
   type SessionInfo,
+  type WorktreeInfo,
+  type WorktreeListItem,
+  type WorktreeStatus,
 } from "./api/pas";
 import { AccountsView } from "./components/AccountsView";
 import {
@@ -20,6 +23,11 @@ import { AddProjectDialog, TextPromptDialog } from "./components/ProjectDialogs"
 import { Sidebar } from "./components/Sidebar";
 import { SplitLayout } from "./components/SplitLayout";
 import { Tabs } from "./components/Tabs";
+import {
+  WorktreeMergeErrorDialog,
+  WorktreeRemoveConfirmDialog,
+  WorktreesDialog,
+} from "./components/WorktreeDialogs";
 import { es } from "./i18n/es";
 import { formatQuotaWindows, quotaPillLabel } from "./state/accounts";
 import {
@@ -41,6 +49,7 @@ import {
   type SplitDir,
 } from "./state/layout";
 import { buildReopenCommand } from "./state/sessionCommand";
+import { isConfirmLossError, worktreeHasLoss } from "./state/worktree";
 
 type TextPromptState =
   | { kind: "rename-project"; project: ProjectInfo }
@@ -76,6 +85,28 @@ export function App() {
     null,
   );
   const [textPrompt, setTextPrompt] = useState<TextPromptState | null>(null);
+  const [worktreesByProject, setWorktreesByProject] = useState<
+    Map<string, WorktreeListItem[]>
+  >(() => new Map());
+  const [worktreesDialogProjectId, setWorktreesDialogProjectId] = useState<
+    string | null
+  >(null);
+  const [worktreesLoading, setWorktreesLoading] = useState(false);
+  const [worktreeBusyId, setWorktreeBusyId] = useState<string | null>(null);
+  const [confirmRemoveTarget, setConfirmRemoveTarget] = useState<{
+    item: WorktreeListItem;
+    exitedSessionId: string | null;
+  } | null>(null);
+  const [confirmRemoveSubmitting, setConfirmRemoveSubmitting] = useState(false);
+  const [confirmRemoveError, setConfirmRemoveError] = useState<string | null>(
+    null,
+  );
+  const [mergeErrorTarget, setMergeErrorTarget] = useState<{
+    worktree: WorktreeInfo;
+    message: string;
+  } | null>(null);
+  const [newSessionExistingWorktree, setNewSessionExistingWorktree] =
+    useState<WorktreeInfo | null>(null);
   const [extraFocusTick, setExtraFocusTick] = useState(0);
   const focusTick = newSessionDialog.focusTick + extraFocusTick;
   const reopeningIdsRef = useRef<Set<string>>(new Set());
@@ -88,6 +119,54 @@ export function App() {
     () => new Map(accounts.map((a) => [a.id, a])),
     [accounts],
   );
+  const worktreeStatusById = useMemo(() => {
+    const map = new Map<string, WorktreeStatus>();
+    for (const list of worktreesByProject.values()) {
+      for (const item of list) {
+        map.set(item.id, item.status);
+      }
+    }
+    return map;
+  }, [worktreesByProject]);
+  const worktreesDialogProject = useMemo(
+    () =>
+      worktreesDialogProjectId
+        ? projects.find((p) => p.id === worktreesDialogProjectId) ?? null
+        : null,
+    [projects, worktreesDialogProjectId],
+  );
+
+  const refreshProjectWorktrees = useCallback(async (projectId: string) => {
+    const list = await api.worktreeList(projectId);
+    setWorktreesByProject((prev) => {
+      const next = new Map(prev);
+      next.set(projectId, list);
+      return next;
+    });
+    return list;
+  }, []);
+
+  const exitedWorktreeProjectsKey = useMemo(() => {
+    const ids = new Set<string>();
+    for (const s of sessions) {
+      if (
+        s.state.state === "exited" &&
+        s.worktree &&
+        s.worktree.state !== "removed"
+      ) {
+        ids.add(s.worktree.project_id);
+      }
+    }
+    return Array.from(ids).sort().join(",");
+  }, [sessions]);
+
+  useEffect(() => {
+    if (!exitedWorktreeProjectsKey) return;
+    const projectIds = exitedWorktreeProjectsKey.split(",");
+    for (const pid of projectIds) {
+      void refreshProjectWorktrees(pid).catch(() => {});
+    }
+  }, [exitedWorktreeProjectsKey, refreshProjectWorktrees]);
 
   const activeTab = useMemo(
     () => layout.tabs.find((t) => t.id === layout.activeTabId) ?? null,
@@ -238,7 +317,11 @@ export function App() {
   }, [layout, layoutLoaded]);
 
   const openNewSessionModal = useCallback(
-    (splitOpts?: { dir: SplitDir; targetSessionId: string | null }) => {
+    (
+      splitOpts?: { dir: SplitDir; targetSessionId: string | null },
+      existingWt: WorktreeInfo | null = null,
+    ) => {
+      setNewSessionExistingWorktree(existingWt);
       setNewSessionSplit({
         enabled: Boolean(splitOpts && splitOpts.targetSessionId),
         dir: splitOpts?.dir ?? "row",
@@ -250,6 +333,7 @@ export function App() {
   );
 
   const closeNewSessionModal = useCallback(() => {
+    setNewSessionExistingWorktree(null);
     setNewSessionDialog((prev) => closeDialog(prev));
   }, []);
 
@@ -292,9 +376,13 @@ export function App() {
       title: form.title,
       cwd: form.cwd,
       mode: form.mode,
+      worktree: form.worktree,
     });
     const refreshed = await api.listSessions();
     setSessions(refreshed);
+    if (form.projectId && form.worktree) {
+      void refreshProjectWorktrees(form.projectId).catch(() => {});
+    }
     setAccountsViewOpen(false);
 
     const targetId = newSessionSplit.targetSessionId ?? activeSessionId;
@@ -351,6 +439,154 @@ export function App() {
         es.errors.actionFailed(es.errors.actions.removeSession, String(err)),
       );
     }
+  }
+
+  async function handleOpenWorktrees(project: ProjectInfo) {
+    setWorktreesDialogProjectId(project.id);
+    setWorktreesLoading(true);
+    try {
+      await refreshProjectWorktrees(project.id);
+    } catch (err) {
+      setErrorBanner(
+        es.errors.actionFailed(es.errors.actions.listWorktrees, String(err)),
+      );
+    } finally {
+      setWorktreesLoading(false);
+    }
+  }
+
+  async function openConfirmRemoveForWorktree(
+    worktree: WorktreeInfo,
+    exitedSessionId: string | null,
+  ) {
+    try {
+      const list = await refreshProjectWorktrees(worktree.project_id);
+      const found = list.find((item) => item.id === worktree.id);
+      if (found) {
+        setConfirmRemoveError(null);
+        setConfirmRemoveTarget({ item: found, exitedSessionId });
+        return;
+      }
+    } catch {
+      // Fallback below if list fails.
+    }
+    const cached = worktreesByProject
+      .get(worktree.project_id)
+      ?.find((item) => item.id === worktree.id);
+    if (cached) {
+      setConfirmRemoveError(null);
+      setConfirmRemoveTarget({ item: cached, exitedSessionId });
+    }
+  }
+
+  async function handleRequestRemoveWorktree(
+    worktree: WorktreeInfo,
+    exitedSessionId: string | null,
+  ) {
+    setWorktreeBusyId(worktree.id);
+    try {
+      const list = await refreshProjectWorktrees(worktree.project_id);
+      const latest = list.find((item) => item.id === worktree.id);
+      if (latest && worktreeHasLoss(latest.status)) {
+        setConfirmRemoveError(null);
+        setConfirmRemoveTarget({ item: latest, exitedSessionId });
+        return;
+      }
+      try {
+        await api.worktreeRemove(worktree.id, false);
+      } catch (err) {
+        const msg = String(err);
+        if (isConfirmLossError(msg)) {
+          await openConfirmRemoveForWorktree(worktree, exitedSessionId);
+          return;
+        }
+        throw err;
+      }
+      if (exitedSessionId) {
+        await api.removeSession(exitedSessionId).catch(() => {});
+      }
+      await refreshProjectWorktrees(worktree.project_id).catch(() => {});
+    } catch (err) {
+      setErrorBanner(
+        es.errors.actionFailed(es.errors.actions.removeWorktree, String(err)),
+      );
+    } finally {
+      setWorktreeBusyId(null);
+    }
+  }
+
+  async function handleMergeWorktreeOnly(worktree: WorktreeInfo) {
+    setWorktreeBusyId(worktree.id);
+    try {
+      await api.worktreeMerge(worktree.id);
+      await refreshProjectWorktrees(worktree.project_id).catch(() => {});
+    } catch (err) {
+      setMergeErrorTarget({ worktree, message: String(err) });
+    } finally {
+      setWorktreeBusyId(null);
+    }
+  }
+
+  async function handleMergeAndRemoveWorktree(
+    worktree: WorktreeInfo,
+    exitedSessionId: string | null,
+  ) {
+    setWorktreeBusyId(worktree.id);
+    try {
+      try {
+        await api.worktreeMerge(worktree.id);
+      } catch (err) {
+        setMergeErrorTarget({ worktree, message: String(err) });
+        return;
+      }
+
+      try {
+        await api.worktreeRemove(worktree.id, false);
+      } catch (err) {
+        const msg = String(err);
+        if (isConfirmLossError(msg)) {
+          await openConfirmRemoveForWorktree(worktree, exitedSessionId);
+          return;
+        }
+        setErrorBanner(
+          es.errors.actionFailed(es.errors.actions.removeWorktree, msg),
+        );
+        await refreshProjectWorktrees(worktree.project_id).catch(() => {});
+        return;
+      }
+
+      if (exitedSessionId) {
+        await api.removeSession(exitedSessionId).catch(() => {});
+      }
+      await refreshProjectWorktrees(worktree.project_id).catch(() => {});
+    } finally {
+      setWorktreeBusyId(null);
+    }
+  }
+
+  async function handleConfirmRemoveWorktree() {
+    if (!confirmRemoveTarget) return;
+    const { item, exitedSessionId } = confirmRemoveTarget;
+    setConfirmRemoveSubmitting(true);
+    setConfirmRemoveError(null);
+    try {
+      await api.worktreeRemove(item.id, true);
+      if (exitedSessionId) {
+        await api.removeSession(exitedSessionId).catch(() => {});
+      }
+      setConfirmRemoveTarget(null);
+      await refreshProjectWorktrees(item.project_id).catch(() => {});
+    } catch (err) {
+      setConfirmRemoveError(String(err));
+    } finally {
+      setConfirmRemoveSubmitting(false);
+    }
+  }
+
+  function handleOpenSessionInExistingWorktree(worktree: WorktreeInfo) {
+    setMergeErrorTarget(null);
+    setWorktreesDialogProjectId(null);
+    openNewSessionModal(undefined, worktree);
   }
 
   async function handleReopenSession(sessionId: string) {
@@ -568,6 +804,9 @@ export function App() {
           onRemoveProject={(project) => {
             void handleRemoveProject(project);
           }}
+          onOpenWorktrees={(project) => {
+            void handleOpenWorktrees(project);
+          }}
           onRenameGroup={(group) =>
             setTextPrompt({ kind: "rename-group", group })
           }
@@ -620,6 +859,7 @@ export function App() {
                     focusTick={focusTick}
                     sessionsById={sessionsById}
                     accountsById={accountsById}
+                    worktreeStatusById={worktreeStatusById}
                     onFocusSession={(sessionId) =>
                       setLayout((prev) => focusSession(prev, sessionId))
                     }
@@ -632,6 +872,8 @@ export function App() {
                     onOpenInTerminal={handleOpenInTerminal}
                     onRemoveExitedSession={handleRemoveExitedSession}
                     onReopenSession={handleReopenSession}
+                    onRemoveWorktree={handleRequestRemoveWorktree}
+                    onMergeAndRemoveWorktree={handleMergeAndRemoveWorktree}
                     onResizeSplit={(path, sizes) =>
                       setLayout((prev) => resizeSplit(prev, tab.id, path, sizes))
                     }
@@ -741,6 +983,7 @@ export function App() {
         quotasByAccountId={quotasByAccountId}
         defaultProjectId={activeSession?.project_id ?? null}
         defaultAccountId={activeSession?.account_id ?? null}
+        existingWorktree={newSessionExistingWorktree}
         selectedProjectIdOverride={pendingNewSessionProjectId}
         onConsumeProjectIdOverride={() => setPendingNewSessionProjectId(null)}
         onRequestAddProject={() => {
@@ -753,6 +996,60 @@ export function App() {
         defaultSplitDir={newSessionSplit.dir}
         onClose={closeNewSessionModal}
         onSubmit={handleCreateSession}
+      />
+
+      <WorktreesDialog
+        project={worktreesDialogProject}
+        items={
+          worktreesDialogProject
+            ? worktreesByProject.get(worktreesDialogProject.id) ?? []
+            : []
+        }
+        loading={worktreesLoading}
+        busyId={worktreeBusyId}
+        sessionsById={sessionsById}
+        suppressed={confirmRemoveTarget !== null || mergeErrorTarget !== null}
+        onClose={() => {
+          setWorktreesDialogProjectId(null);
+          setExtraFocusTick((n) => n + 1);
+        }}
+        onGoToSession={(sessionId) => {
+          setWorktreesDialogProjectId(null);
+          setAccountsViewOpen(false);
+          setLayout((prev) => openSessionTab(prev, sessionId));
+          setExtraFocusTick((n) => n + 1);
+        }}
+        onOpenSession={(item) => handleOpenSessionInExistingWorktree(item)}
+        onMerge={(item) => handleMergeWorktreeOnly(item)}
+        onRemove={(item) => {
+          const linked = item.session_id
+            ? sessionsById.get(item.session_id)
+            : undefined;
+          const exitedId =
+            linked && linked.state.state === "exited" ? linked.id : null;
+          return handleRequestRemoveWorktree(item, exitedId);
+        }}
+      />
+
+      <WorktreeRemoveConfirmDialog
+        item={confirmRemoveTarget?.item ?? null}
+        submitting={confirmRemoveSubmitting}
+        error={confirmRemoveError}
+        onCancel={() => {
+          setConfirmRemoveTarget(null);
+          setConfirmRemoveError(null);
+          setExtraFocusTick((n) => n + 1);
+        }}
+        onConfirm={handleConfirmRemoveWorktree}
+      />
+
+      <WorktreeMergeErrorDialog
+        target={mergeErrorTarget}
+        onClose={() => {
+          setMergeErrorTarget(null);
+          setExtraFocusTick((n) => n + 1);
+        }}
+        onOpenSessionInWorktree={handleOpenSessionInExistingWorktree}
       />
 
       <AddProjectDialog

@@ -22,12 +22,13 @@ use pas_core::protocol::{
     METHOD_PROJECT_RENAME, METHOD_PROJECT_UNPIN, METHOD_QUOTA_LIST, METHOD_SESSION_CREATE,
     METHOD_SESSION_INPUT, METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_REMOVE,
     METHOD_SESSION_RESIZE, METHOD_SESSION_SNAPSHOT, METHOD_SESSION_SUBSCRIBE,
-    METHOD_SESSION_SUBSCRIBE_ALL, METHOD_SESSION_UNSUBSCRIBE, METHOD_WORKTREE_CREATE,
-    METHOD_WORKTREE_LIST, METHOD_WORKTREE_MERGE, METHOD_WORKTREE_REMOVE,
+    METHOD_SESSION_SUBSCRIBE_ALL, METHOD_SESSION_UNSUBSCRIBE, METHOD_WORKTREE_BRANCHES,
+    METHOD_WORKTREE_CREATE, METHOD_WORKTREE_LIST, METHOD_WORKTREE_MERGE, METHOD_WORKTREE_REMOVE,
     METHOD_WORKTREE_SUGGEST_BRANCH, Notification, PermissionChoice, ProjectAddParams, ProjectInfo,
     ProjectMoveParams, ProjectRenameParams, ResizeParams, SessionInfo, SessionRemovedEvent,
-    SnapshotResult, WorktreeCreateParams, WorktreeInfo, WorktreeListItem, WorktreeListParams,
-    WorktreeRemoveParams, WorktreeSuggestBranchParams, WorktreeSuggestBranchResult,
+    SnapshotResult, WorktreeBranchesParams, WorktreeBranchesResult, WorktreeCreateParams,
+    WorktreeInfo, WorktreeListItem, WorktreeListParams, WorktreeRemoveParams,
+    WorktreeSuggestBranchParams, WorktreeSuggestBranchResult,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -309,6 +310,17 @@ impl Bridge {
         params: WorktreeSuggestBranchParams,
     ) -> Result<WorktreeSuggestBranchResult, CoreError> {
         self.call(METHOD_WORKTREE_SUGGEST_BRANCH, params).await
+    }
+
+    pub async fn worktree_branches(
+        &self,
+        project_id: String,
+    ) -> Result<WorktreeBranchesResult, CoreError> {
+        self.call(
+            METHOD_WORKTREE_BRANCHES,
+            WorktreeBranchesParams { project_id },
+        )
+        .await
     }
 
     pub async fn worktree_create(

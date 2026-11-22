@@ -1,5 +1,10 @@
 import { Fragment, useRef } from "react";
-import type { AccountInfo, SessionInfo } from "../api/pas";
+import type {
+  AccountInfo,
+  SessionInfo,
+  WorktreeInfo,
+  WorktreeStatus,
+} from "../api/pas";
 import type { LayoutNode, SplitDir } from "../state/layout";
 import { ChatPane } from "./ChatPane";
 import { TerminalPane } from "./TerminalPane";
@@ -12,12 +17,21 @@ interface SplitLayoutProps {
   focusTick: number;
   sessionsById: Map<string, SessionInfo>;
   accountsById: Map<string, AccountInfo>;
+  worktreeStatusById: Map<string, WorktreeStatus>;
   onFocusSession: (sessionId: string) => void;
   onSplitSession: (sessionId: string, dir: SplitDir) => void;
   onClosePane: (sessionId: string) => void;
   onOpenInTerminal: (session: SessionInfo, command: string[]) => Promise<void>;
   onRemoveExitedSession: (sessionId: string) => Promise<void>;
   onReopenSession: (sessionId: string) => Promise<void>;
+  onRemoveWorktree: (
+    worktree: WorktreeInfo,
+    exitedSessionId: string,
+  ) => Promise<void>;
+  onMergeAndRemoveWorktree: (
+    worktree: WorktreeInfo,
+    exitedSessionId: string,
+  ) => Promise<void>;
   onResizeSplit: (path: number[], sizes: number[]) => void;
 }
 
@@ -29,18 +43,24 @@ export function SplitLayout({
   focusTick,
   sessionsById,
   accountsById,
+  worktreeStatusById,
   onFocusSession,
   onSplitSession,
   onClosePane,
   onOpenInTerminal,
   onRemoveExitedSession,
   onReopenSession,
+  onRemoveWorktree,
+  onMergeAndRemoveWorktree,
   onResizeSplit,
 }: SplitLayoutProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   if (node.kind === "pane") {
     const session = sessionsById.get(node.sessionId);
+    const worktreeStatus = session?.worktree
+      ? worktreeStatusById.get(session.worktree.id) ?? null
+      : null;
     if (session?.mode === "chat") {
       const account = session.account_id
         ? accountsById.get(session.account_id)
@@ -50,6 +70,7 @@ export function SplitLayout({
           sessionId={node.sessionId}
           session={session}
           account={account}
+          worktreeStatus={worktreeStatus}
           isFocused={node.sessionId === focusedSessionId}
           isVisible={isVisible}
           focusTick={focusTick}
@@ -59,6 +80,10 @@ export function SplitLayout({
           onOpenInTerminal={onOpenInTerminal}
           onRemoveExited={() => onRemoveExitedSession(node.sessionId)}
           onReopen={() => onReopenSession(node.sessionId)}
+          onRemoveWorktree={(wt) => onRemoveWorktree(wt, node.sessionId)}
+          onMergeAndRemoveWorktree={(wt) =>
+            onMergeAndRemoveWorktree(wt, node.sessionId)
+          }
         />
       );
     }
@@ -66,6 +91,7 @@ export function SplitLayout({
       <TerminalPane
         sessionId={node.sessionId}
         session={session}
+        worktreeStatus={worktreeStatus}
         isFocused={node.sessionId === focusedSessionId}
         isVisible={isVisible}
         focusTick={focusTick}
@@ -74,6 +100,10 @@ export function SplitLayout({
         onClose={() => onClosePane(node.sessionId)}
         onRemoveExited={() => onRemoveExitedSession(node.sessionId)}
         onReopen={() => onReopenSession(node.sessionId)}
+        onRemoveWorktree={(wt) => onRemoveWorktree(wt, node.sessionId)}
+        onMergeAndRemoveWorktree={(wt) =>
+          onMergeAndRemoveWorktree(wt, node.sessionId)
+        }
       />
     );
   }
@@ -144,12 +174,15 @@ export function SplitLayout({
                 focusTick={focusTick}
                 sessionsById={sessionsById}
                 accountsById={accountsById}
+                worktreeStatusById={worktreeStatusById}
                 onFocusSession={onFocusSession}
                 onSplitSession={onSplitSession}
                 onClosePane={onClosePane}
                 onOpenInTerminal={onOpenInTerminal}
                 onRemoveExitedSession={onRemoveExitedSession}
                 onReopenSession={onReopenSession}
+                onRemoveWorktree={onRemoveWorktree}
+                onMergeAndRemoveWorktree={onMergeAndRemoveWorktree}
                 onResizeSplit={onResizeSplit}
               />
             </div>
