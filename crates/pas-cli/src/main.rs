@@ -122,8 +122,9 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
             title,
             command,
         } => {
+            // pasd runs in its own folder, so a relative --cwd must be resolved here.
             let cwd = match cwd {
-                Some(dir) => dir,
+                Some(dir) => std::path::absolute(dir)?,
                 None => std::env::current_dir()?,
             };
             let res: CreateResult = client

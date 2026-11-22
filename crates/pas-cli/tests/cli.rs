@@ -216,3 +216,29 @@ fn kill_leaves_no_orphan_fake_agent() {
         "quedó fake-agent huérfano tras pas kill"
     );
 }
+
+#[test]
+fn relative_cwd_is_resolved_from_caller_dir() {
+    let env = TestEnv::new();
+    let daemon_dir = tempdir().unwrap();
+    let caller_dir = tempdir().unwrap();
+
+    // Arranca pasd desde otra carpeta para que su cwd no coincida con la del llamador.
+    env.pas()
+        .current_dir(daemon_dir.path())
+        .args(["list"])
+        .assert()
+        .success();
+
+    env.pas()
+        .current_dir(caller_dir.path())
+        .args(["new", "--cwd", ".", "--title", "rel", "--", &fake_agent_bin()])
+        .assert()
+        .success();
+
+    let list = env.pas().args(["list"]).output().unwrap();
+    let list_out = String::from_utf8_lossy(&list.stdout);
+    let want = caller_dir.path().display().to_string();
+    assert!(list_out.contains(&want), "list: {list_out:?}, want {want}");
+    env.pas().args(["kill", "rel"]).assert().success();
+}
