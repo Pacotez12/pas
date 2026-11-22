@@ -1,4 +1,5 @@
 mod hook;
+mod statusline;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -62,6 +63,12 @@ enum Commands {
         agent: String,
         event: String,
     },
+    Statusline {
+        #[arg(long)]
+        agent: String,
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -85,6 +92,9 @@ async fn main() -> ExitCode {
     if let Commands::Hook { agent, event } = cli.command {
         hook::run(&agent, &event).await;
         return ExitCode::SUCCESS;
+    }
+    if let Commands::Statusline { agent, command } = cli.command {
+        return statusline::run(&agent, &command).await;
     }
     match run(cli).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -190,7 +200,9 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
                 .call(METHOD_SESSION_KILL, IdParams { id: session })
                 .await?;
         }
-        Commands::Hook { .. } => unreachable!("hook se maneja antes de conectar a pasd"),
+        Commands::Hook { .. } | Commands::Statusline { .. } => {
+            unreachable!("hook y statusline se manejan antes de conectar a pasd")
+        }
     }
 
     Ok(())

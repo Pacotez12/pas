@@ -32,6 +32,9 @@ pub const METHOD_ACCOUNT_LIST: &str = "account.list";
 pub const METHOD_ACCOUNT_ADD: &str = "account.add";
 pub const METHOD_ACCOUNT_RENAME: &str = "account.rename";
 pub const METHOD_ACCOUNT_REMOVE: &str = "account.remove";
+pub const METHOD_ACCOUNT_INSTALL_HOOKS: &str = "account.install_hooks";
+pub const METHOD_ACCOUNT_UNINSTALL_HOOKS: &str = "account.uninstall_hooks";
+pub const METHOD_QUOTA_REPORT: &str = "quota.report";
 pub const METHOD_CLAUDE_CONVERSATIONS: &str = "claude.conversations";
 
 pub const EVENT_SESSION_OUTPUT: &str = "session.output";
@@ -54,6 +57,7 @@ pub const ERR_SESSION_RUNNING: i32 = 1010;
 pub const ERR_ACCOUNT_NOT_FOUND: i32 = 1011;
 pub const ERR_ACCOUNT_ALREADY_EXISTS: i32 = 1012;
 pub const ERR_ACCOUNT_DIR_INVALID: i32 = 1013;
+pub const ERR_HOOKS_CONFIG_INVALID: i32 = 1014;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
@@ -355,6 +359,8 @@ pub struct AccountInfo {
     pub config_dir: PathBuf,
     pub owned: bool,
     pub created_at: u64,
+    #[serde(default)]
+    pub hooks_installed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -383,4 +389,12 @@ pub struct HookParams {
     pub id: String,
     pub agent: AgentKind,
     pub event: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuotaReportParams {
+    pub agent: AgentKind,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    pub payload: Value,
 }

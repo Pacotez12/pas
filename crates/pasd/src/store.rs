@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use pas_core::protocol::{AccountInfo, AgentKind, GroupInfo, ProjectInfo};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
+use crate::hooks_install::FileSnapshot;
 use crate::remote::{read_origin_remote_key, repo_name_from_remote_key};
 
 #[derive(Debug, thiserror::Error)]
@@ -482,6 +483,7 @@ impl Store {
             config_dir: config_dir.to_path_buf(),
             owned,
             created_at: created_at.max(0) as u64,
+            hooks_installed: false,
         })
     }
 
@@ -562,6 +564,69 @@ impl Store {
         tx.commit()?;
         Ok(existing)
     }
+
+    pub fn save_hook_snapshots(
+        &self,
+        account_id: &str,
+        snapshots: &[FileSnapshot],
+    ) -> Result<(), StoreError> {
+        if snapshots.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.conn.lock().expect("store lock poisoned");
+        let tx = conn.transaction()?;
+        for snap in snapshots {
+            let path_str = snap.path.to_string_lossy().into_owned();
+            tx.execute(
+                "INSERT INTO hook_snapshots (account_id, file_path, original_bytes, installed_bytes)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(account_id, file_path) DO UPDATE SET
+                     original_bytes = excluded.original_bytes,
+                     installed_bytes = excluded.installed_bytes",
+                params![
+                    account_id,
+                    &path_str,
+                    snap.original_bytes.as_deref(),
+                    &snap.installed_bytes
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn load_hook_snapshots(&self, account_id: &str) -> Result<Vec<FileSnapshot>, StoreError> {
+        let conn = self.conn.lock().expect("store lock poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT file_path, original_bytes, installed_bytes
+             FROM hook_snapshots
+             WHERE account_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![account_id], |row| {
+            let path: String = row.get(0)?;
+            let original_bytes: Option<Vec<u8>> = row.get(1)?;
+            let installed_bytes: Vec<u8> = row.get(2)?;
+            Ok(FileSnapshot {
+                path: PathBuf::from(path),
+                original_bytes,
+                installed_bytes,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn delete_hook_snapshots(&self, account_id: &str) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect("store lock poisoned");
+        conn.execute(
+            "DELETE FROM hook_snapshots WHERE account_id = ?1",
+            params![account_id],
+        )?;
+        Ok(())
+    }
 }
 
 fn init_connection(conn: &Connection) -> Result<(), StoreError> {
@@ -602,6 +667,20 @@ fn init_connection(conn: &Connection) -> Result<(), StoreError> {
              COMMIT;",
         )?;
     }
+    if version < 3 {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE IF NOT EXISTS hook_snapshots (
+                 account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                 file_path TEXT NOT NULL,
+                 original_bytes BLOB,
+                 installed_bytes BLOB NOT NULL,
+                 PRIMARY KEY (account_id, file_path)
+             );
+             PRAGMA user_version = 3;
+             COMMIT;",
+        )?;
+    }
     Ok(())
 }
 
@@ -624,6 +703,7 @@ fn map_account_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AccountInfo> {
         config_dir: PathBuf::from(config_dir),
         owned: owned != 0,
         created_at: created_at.max(0) as u64,
+        hooks_installed: false,
     })
 }
 

@@ -5,10 +5,17 @@ use std::path::Path;
 
 use pas_core::protocol::{AccountAddParams, AccountInfo, AgentKind};
 
+use crate::hooks_install::{self, HooksInstallError};
 use crate::store::{Store, StoreError};
 
+fn with_hooks_status(mut account: AccountInfo) -> AccountInfo {
+    account.hooks_installed = hooks_install::is_installed(account.agent, &account.config_dir);
+    account
+}
+
 pub fn list_accounts(store: &Store) -> Result<Vec<AccountInfo>, StoreError> {
-    store.list_accounts()
+    let list = store.list_accounts()?;
+    Ok(list.into_iter().map(with_hooks_status).collect())
 }
 
 pub fn add_account(
@@ -34,7 +41,7 @@ pub fn add_account(
             let canonical = fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
 
             match store.insert_account(&id, params.agent, name, &canonical, true) {
-                Ok(info) => Ok(info),
+                Ok(info) => Ok(with_hooks_status(info)),
                 Err(err) => {
                     let _ = fs::remove_dir_all(&dir);
                     Err(err)
@@ -47,13 +54,39 @@ pub fn add_account(
             }
             let canonical = fs::canonicalize(&dir)?;
             let id = store.generate_account_id()?;
-            store.insert_account(&id, params.agent, name, &canonical, false)
+            store
+                .insert_account(&id, params.agent, name, &canonical, false)
+                .map(with_hooks_status)
         }
     }
 }
 
 pub fn rename_account(store: &Store, id: &str, name: &str) -> Result<AccountInfo, StoreError> {
-    store.rename_account(id, name)
+    store.rename_account(id, name).map(with_hooks_status)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AccountHooksError {
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error(transparent)]
+    Hooks(#[from] HooksInstallError),
+}
+
+pub fn install_account_hooks(store: &Store, id: &str) -> Result<AccountInfo, AccountHooksError> {
+    let account = store.get_account(id)?;
+    let pas_bin = hooks_install::find_pas_bin()?;
+    let snapshots = hooks_install::install(account.agent, &account.config_dir, &pas_bin)?;
+    store.save_hook_snapshots(id, &snapshots)?;
+    Ok(with_hooks_status(account))
+}
+
+pub fn uninstall_account_hooks(store: &Store, id: &str) -> Result<AccountInfo, AccountHooksError> {
+    let account = store.get_account(id)?;
+    let snapshots = store.load_hook_snapshots(id)?;
+    hooks_install::uninstall(account.agent, &account.config_dir, &snapshots)?;
+    store.delete_hook_snapshots(id)?;
+    Ok(with_hooks_status(account))
 }
 
 pub fn remove_account(store: &Store, id: &str, delete_dir: bool) -> Result<(), StoreError> {

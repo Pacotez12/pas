@@ -5,24 +5,27 @@ use base64::engine::general_purpose::STANDARD;
 use pas_core::protocol::{
     AccountAddParams, AccountRemoveParams, AccountRenameParams, ClaudeConversationsParams,
     CreateParams, CreateResult, ERR_ACCOUNT_ALREADY_EXISTS, ERR_ACCOUNT_DIR_INVALID,
-    ERR_ACCOUNT_NOT_FOUND, ERR_GROUP_ALREADY_EXISTS, ERR_GROUP_NOT_FOUND, ERR_INVALID_PARAMS,
-    ERR_METHOD_NOT_FOUND, ERR_NOT_A_GIT_REPO, ERR_PROJECT_ALREADY_EXISTS, ERR_PROJECT_NOT_FOUND,
-    GroupCreateParams, GroupRenameParams, HookParams, IdParams, InputParams, METHOD_ACCOUNT_ADD,
-    METHOD_ACCOUNT_LIST, METHOD_ACCOUNT_REMOVE, METHOD_ACCOUNT_RENAME, METHOD_CLAUDE_CONVERSATIONS,
-    METHOD_DAEMON_PING, METHOD_GROUP_CREATE, METHOD_GROUP_LIST, METHOD_GROUP_RENAME,
-    METHOD_PROJECT_ADD, METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE, METHOD_PROJECT_REMOVE,
-    METHOD_PROJECT_RENAME, METHOD_PROJECT_UNPIN, METHOD_SESSION_CREATE, METHOD_SESSION_HOOK,
+    ERR_ACCOUNT_NOT_FOUND, ERR_GROUP_ALREADY_EXISTS, ERR_GROUP_NOT_FOUND,
+    ERR_HOOKS_CONFIG_INVALID, ERR_INVALID_PARAMS, ERR_METHOD_NOT_FOUND, ERR_NOT_A_GIT_REPO,
+    ERR_PROJECT_ALREADY_EXISTS, ERR_PROJECT_NOT_FOUND, GroupCreateParams, GroupRenameParams,
+    HookParams, IdParams, InputParams, METHOD_ACCOUNT_ADD, METHOD_ACCOUNT_INSTALL_HOOKS,
+    METHOD_ACCOUNT_LIST, METHOD_ACCOUNT_REMOVE, METHOD_ACCOUNT_RENAME,
+    METHOD_ACCOUNT_UNINSTALL_HOOKS, METHOD_CLAUDE_CONVERSATIONS, METHOD_DAEMON_PING,
+    METHOD_GROUP_CREATE, METHOD_GROUP_LIST, METHOD_GROUP_RENAME, METHOD_PROJECT_ADD,
+    METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE, METHOD_PROJECT_REMOVE, METHOD_PROJECT_RENAME,
+    METHOD_PROJECT_UNPIN, METHOD_QUOTA_REPORT, METHOD_SESSION_CREATE, METHOD_SESSION_HOOK,
     METHOD_SESSION_INPUT, METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_READ,
     METHOD_SESSION_REMOVE, METHOD_SESSION_RESIZE, METHOD_SESSION_SEND, METHOD_SESSION_SNAPSHOT,
     METHOD_SESSION_WAIT, PingResult, ProjectAddParams, ProjectMoveParams, ProjectRenameParams,
-    ReadParams, ReadResult, Request, ResizeParams, Response, RpcError, SendParams, SnapshotResult,
-    WaitParams,
+    QuotaReportParams, ReadParams, ReadResult, Request, ResizeParams, Response, RpcError,
+    SendParams, SnapshotResult, WaitParams,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::accounts;
+use crate::accounts::{self, AccountHooksError};
 use crate::claude;
+use crate::hooks_install::HooksInstallError;
 use crate::manager::{Manager, session_error_to_rpc};
 use crate::store::StoreError;
 
@@ -203,6 +206,22 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
                 .map_err(store_error_to_rpc)?;
             Ok(json!({}))
         }
+        METHOD_ACCOUNT_INSTALL_HOOKS => {
+            let params: IdParams = parse_params(req.params)?;
+            let account = accounts::install_account_hooks(mgr.store(), &params.id)
+                .map_err(account_hooks_error_to_rpc)?;
+            ok_json(account)
+        }
+        METHOD_ACCOUNT_UNINSTALL_HOOKS => {
+            let params: IdParams = parse_params(req.params)?;
+            let account = accounts::uninstall_account_hooks(mgr.store(), &params.id)
+                .map_err(account_hooks_error_to_rpc)?;
+            ok_json(account)
+        }
+        METHOD_QUOTA_REPORT => {
+            let _params: QuotaReportParams = parse_params(req.params)?;
+            Ok(json!({}))
+        }
         other => Err(RpcError {
             code: ERR_METHOD_NOT_FOUND,
             message: format!("Método desconocido: {other}."),
@@ -226,6 +245,22 @@ pub(crate) fn store_error_to_rpc(err: StoreError) -> RpcError {
     RpcError {
         code,
         message: err.to_string(),
+    }
+}
+
+fn account_hooks_error_to_rpc(err: AccountHooksError) -> RpcError {
+    match err {
+        AccountHooksError::Store(e) => store_error_to_rpc(e),
+        AccountHooksError::Hooks(e) => {
+            let code = match e {
+                HooksInstallError::InvalidJson { .. } => ERR_HOOKS_CONFIG_INVALID,
+                HooksInstallError::PasBinNotFound | HooksInstallError::Io(_) => -32603,
+            };
+            RpcError {
+                code,
+                message: e.to_string(),
+            }
+        }
     }
 }
 

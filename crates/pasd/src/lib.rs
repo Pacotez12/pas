@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod claude;
+pub mod hooks_install;
 pub mod manager;
 pub mod remote;
 pub mod rpc;
