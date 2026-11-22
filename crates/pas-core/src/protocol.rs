@@ -35,12 +35,15 @@ pub const METHOD_ACCOUNT_REMOVE: &str = "account.remove";
 pub const METHOD_ACCOUNT_INSTALL_HOOKS: &str = "account.install_hooks";
 pub const METHOD_ACCOUNT_UNINSTALL_HOOKS: &str = "account.uninstall_hooks";
 pub const METHOD_QUOTA_REPORT: &str = "quota.report";
+pub const METHOD_QUOTA_LIST: &str = "quota.list";
 pub const METHOD_CLAUDE_CONVERSATIONS: &str = "claude.conversations";
 
 pub const EVENT_SESSION_OUTPUT: &str = "session.output";
 pub const EVENT_SESSION_STATE: &str = "session.state";
 pub const EVENT_SESSION_CREATED: &str = "session.created";
 pub const EVENT_SESSION_REMOVED: &str = "session.removed";
+pub const EVENT_QUOTA_CHANGED: &str = "quota.changed";
+pub const EVENT_QUOTA_WARNING: &str = "quota.warning";
 
 pub const ERR_METHOD_NOT_FOUND: i32 = -32601;
 pub const ERR_INVALID_PARAMS: i32 = -32602;
@@ -396,5 +399,51 @@ pub struct QuotaReportParams {
     pub agent: AgentKind,
     #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
     pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuotaWindow {
+    pub used_percent: f32,
+    pub resets_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Quota {
+    #[serde(default)]
+    pub five_h: Option<QuotaWindow>,
+    #[serde(default)]
+    pub week: Option<QuotaWindow>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AccountQuota {
+    pub account_id: String,
+    #[serde(default)]
+    pub quota: Option<Quota>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuotaChangedEvent {
+    pub account_id: String,
+    pub quota: Quota,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuotaWindowKind {
+    FiveH,
+    Week,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuotaWarningEvent {
+    pub account_id: String,
+    pub window: QuotaWindowKind,
+    pub used_percent: f32,
+    pub resets_at: i64,
+    pub threshold_percent: f32,
 }

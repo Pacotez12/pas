@@ -45,6 +45,7 @@ async fn report_quota(agent: &str, payload: Option<Value>) {
     let params = QuotaReportParams {
         agent: agent_kind,
         session_id,
+        account_id: None,
         payload,
     };
 

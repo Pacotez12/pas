@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod claude;
 pub mod hooks_install;
 pub mod manager;
+pub mod quota;
 pub mod remote;
 pub mod rpc;
 pub mod server;

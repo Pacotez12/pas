@@ -5,6 +5,7 @@ use std::sync::Arc;
 use clap::Parser;
 use pas_core::socket::socket_path;
 use pasd::manager::Manager;
+use pasd::quota::CODEX_POLL_INTERVAL;
 use pasd::server;
 use pasd::store::Store;
 use tokio::signal::unix::{SignalKind, signal};
@@ -86,6 +87,7 @@ async fn main() -> ExitCode {
         Some(data_dir.join("accounts")),
         Some(path.clone()),
     );
+    let quota_poller = mgr.spawn_quota_poller(CODEX_POLL_INTERVAL);
 
     tokio::select! {
         _ = server::serve(listener, Arc::clone(&mgr)) => {}
@@ -93,6 +95,8 @@ async fn main() -> ExitCode {
             tracing::info!("señal de apagado recibida, cerrando pasd");
         }
     }
+
+    quota_poller.abort();
 
     mgr.kill_all();
     let _ = std::fs::remove_file(&path);

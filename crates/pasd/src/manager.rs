@@ -1,21 +1,25 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use pas_core::protocol::{
-    CreateParams, ERR_INVALID_PARAMS, ERR_SESSION_EXITED, ERR_SESSION_NOT_FOUND,
-    ERR_SESSION_RUNNING, ERR_SPAWN_FAILED, ERR_WAIT_TIMEOUT, EVENT_SESSION_CREATED,
-    EVENT_SESSION_REMOVED, EVENT_SESSION_STATE, Notification, RpcError, SessionCreatedEvent,
+    AccountQuota, AgentKind, CreateParams, ERR_INVALID_PARAMS, ERR_SESSION_EXITED,
+    ERR_SESSION_NOT_FOUND, ERR_SESSION_RUNNING, ERR_SPAWN_FAILED, ERR_WAIT_TIMEOUT,
+    EVENT_QUOTA_CHANGED, EVENT_QUOTA_WARNING, EVENT_SESSION_CREATED, EVENT_SESSION_REMOVED,
+    EVENT_SESSION_STATE, Notification, QuotaReportParams, RpcError, SessionCreatedEvent,
     SessionInfo, SessionRemovedEvent, SessionState, SessionStateEvent,
 };
 use pas_core::socket::socket_path as default_socket_path;
 use serde_json::json;
 use tokio::sync::broadcast;
+use tokio::task::JoinHandle;
 
 use crate::accounts;
+use crate::quota::{self, QuotaTracker, QuotaUpdate};
 use crate::rpc::store_error_to_rpc;
 use crate::session::{Session, SessionError};
-use crate::store::Store;
+use crate::store::{Store, StoreError};
 
 const EVENTS_BROADCAST_CAPACITY: usize = 256;
 
@@ -27,6 +31,7 @@ pub struct Manager {
     store: Store,
     accounts_dir: Option<PathBuf>,
     socket_path: Option<PathBuf>,
+    quotas: QuotaTracker,
 }
 
 impl Manager {
@@ -53,7 +58,104 @@ impl Manager {
             store,
             accounts_dir,
             socket_path,
+            quotas: QuotaTracker::default(),
         })
+    }
+
+    pub fn set_quota_warn_percent(&self, percent: f32) {
+        self.quotas.set_warn_percent(percent);
+    }
+
+    pub fn remove_account_quota(&self, account_id: &str) {
+        self.quotas.remove(account_id);
+    }
+
+    pub fn list_quotas(&self) -> Result<Vec<AccountQuota>, StoreError> {
+        let accounts = self.store.list_accounts()?;
+        Ok(accounts
+            .into_iter()
+            .map(|acc| {
+                let quota = self.quotas.get(&acc.id);
+                AccountQuota {
+                    account_id: acc.id,
+                    quota,
+                }
+            })
+            .collect())
+    }
+
+    pub fn report_quota(&self, params: QuotaReportParams) {
+        let Some(account_id) = self.resolve_quota_account(&params) else {
+            return;
+        };
+        let now = quota::now_unix_secs();
+        let Some(parsed) = quota::parse_report(params.agent, &params.payload, now) else {
+            return;
+        };
+        let update = self.quotas.record(&account_id, parsed);
+        self.emit_quota_update(update);
+    }
+
+    pub fn poll_codex_quotas(&self) {
+        let Ok(accounts) = self.store.list_accounts() else {
+            return;
+        };
+        let now = quota::now_unix_secs();
+        for acc in accounts {
+            if acc.agent != AgentKind::Codex {
+                continue;
+            }
+            let update = self.quotas.poll_codex_account(&acc.id, &acc.config_dir, now);
+            self.emit_quota_update(update);
+        }
+    }
+
+    pub fn spawn_quota_poller(self: &Arc<Self>, interval: Duration) -> JoinHandle<()> {
+        let mgr = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                let mgr_clone = Arc::clone(&mgr);
+                let _ = tokio::task::spawn_blocking(move || mgr_clone.poll_codex_quotas()).await;
+            }
+        })
+    }
+
+    fn resolve_quota_account(&self, params: &QuotaReportParams) -> Option<String> {
+        if let Some(ref account_id) = params.account_id
+            && !account_id.trim().is_empty()
+        {
+            return Some(account_id.trim().to_string());
+        }
+        if let Some(ref session_id) = params.session_id
+            && let Ok(session) = self.get(session_id)
+            && let Some(account_id) = session.info().account_id
+        {
+            return Some(account_id);
+        }
+        let accounts = self.store.list_accounts().ok()?;
+        let mut matching = accounts.into_iter().filter(|a| a.agent == params.agent);
+        let first = matching.next()?;
+        if matching.next().is_none() {
+            Some(first.id)
+        } else {
+            None
+        }
+    }
+
+    fn emit_quota_update(&self, update: QuotaUpdate) {
+        if let Some(changed) = update.changed {
+            let _ = self
+                .events_tx
+                .send(Notification::new(EVENT_QUOTA_CHANGED, json!(changed)));
+        }
+        for warning in update.warnings {
+            let _ = self
+                .events_tx
+                .send(Notification::new(EVENT_QUOTA_WARNING, json!(warning)));
+        }
     }
 
     pub fn store(&self) -> &Store {

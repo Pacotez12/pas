@@ -13,7 +13,8 @@ use pas_core::protocol::{
     METHOD_ACCOUNT_UNINSTALL_HOOKS, METHOD_CLAUDE_CONVERSATIONS, METHOD_DAEMON_PING,
     METHOD_GROUP_CREATE, METHOD_GROUP_LIST, METHOD_GROUP_RENAME, METHOD_PROJECT_ADD,
     METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE, METHOD_PROJECT_REMOVE, METHOD_PROJECT_RENAME,
-    METHOD_PROJECT_UNPIN, METHOD_QUOTA_REPORT, METHOD_SESSION_CREATE, METHOD_SESSION_HOOK,
+    METHOD_PROJECT_UNPIN, METHOD_QUOTA_LIST, METHOD_QUOTA_REPORT, METHOD_SESSION_CREATE,
+    METHOD_SESSION_HOOK,
     METHOD_SESSION_INPUT, METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_READ,
     METHOD_SESSION_REMOVE, METHOD_SESSION_RESIZE, METHOD_SESSION_SEND, METHOD_SESSION_SNAPSHOT,
     METHOD_SESSION_WAIT, PingResult, ProjectAddParams, ProjectMoveParams, ProjectRenameParams,
@@ -204,6 +205,7 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
             let params: AccountRemoveParams = parse_params(req.params)?;
             accounts::remove_account(mgr.store(), &params.id, params.delete_dir)
                 .map_err(store_error_to_rpc)?;
+            mgr.remove_account_quota(&params.id);
             Ok(json!({}))
         }
         METHOD_ACCOUNT_INSTALL_HOOKS => {
@@ -219,8 +221,13 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
             ok_json(account)
         }
         METHOD_QUOTA_REPORT => {
-            let _params: QuotaReportParams = parse_params(req.params)?;
+            let params: QuotaReportParams = parse_params(req.params)?;
+            mgr.report_quota(params);
             Ok(json!({}))
+        }
+        METHOD_QUOTA_LIST => {
+            let list = mgr.list_quotas().map_err(store_error_to_rpc)?;
+            ok_json(list)
         }
         other => Err(RpcError {
             code: ERR_METHOD_NOT_FOUND,
