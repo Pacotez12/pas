@@ -11,6 +11,7 @@ pub const METHOD_SESSION_SEND: &str = "session.send";
 pub const METHOD_SESSION_READ: &str = "session.read";
 pub const METHOD_SESSION_WAIT: &str = "session.wait";
 pub const METHOD_SESSION_KILL: &str = "session.kill";
+pub const METHOD_SESSION_REMOVE: &str = "session.remove";
 pub const METHOD_SESSION_INPUT: &str = "session.input";
 pub const METHOD_SESSION_RESIZE: &str = "session.resize";
 pub const METHOD_SESSION_SNAPSHOT: &str = "session.snapshot";
@@ -26,6 +27,7 @@ pub const METHOD_PROJECT_UNPIN: &str = "project.unpin";
 pub const METHOD_GROUP_LIST: &str = "group.list";
 pub const METHOD_GROUP_CREATE: &str = "group.create";
 pub const METHOD_GROUP_RENAME: &str = "group.rename";
+pub const METHOD_CLAUDE_CONVERSATIONS: &str = "claude.conversations";
 
 pub const EVENT_SESSION_OUTPUT: &str = "session.output";
 pub const EVENT_SESSION_STATE: &str = "session.state";
@@ -43,6 +45,7 @@ pub const ERR_PROJECT_ALREADY_EXISTS: i32 = 1006;
 pub const ERR_NOT_A_GIT_REPO: i32 = 1007;
 pub const ERR_GROUP_NOT_FOUND: i32 = 1008;
 pub const ERR_GROUP_ALREADY_EXISTS: i32 = 1009;
+pub const ERR_SESSION_RUNNING: i32 = 1010;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
@@ -290,4 +293,16 @@ pub struct SessionCreatedEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRemovedEvent {
     pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaudeConversationsParams {
+    pub cwd: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaudeConversation {
+    pub id: String,
+    pub title: String,
+    pub modified_at: u64,
 }

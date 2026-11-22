@@ -1,23 +1,44 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, ChevronDown } from "lucide-react";
-import type { ProjectInfo } from "../api/pas";
+import { Check, ChevronDown, FolderPlus } from "lucide-react";
+import { api, type ClaudeConversation, type ProjectInfo } from "../api/pas";
 import { es } from "../i18n/es";
 import { resolveDialogKey } from "../state/dialog";
 import type { SplitDir } from "../state/layout";
+import {
+  buildNewSessionCommand,
+  PRESET_SHORT,
+  splitCommandString,
+  type AgentPreset,
+} from "../state/sessionCommand";
 
-type AgentPreset = "claude" | "codex" | "agy" | "custom";
+const MONTHS_ES = [
+  "ene",
+  "feb",
+  "mar",
+  "abr",
+  "may",
+  "jun",
+  "jul",
+  "ago",
+  "sep",
+  "oct",
+  "nov",
+  "dic",
+];
 
-const PRESET_COMMANDS: Record<Exclude<AgentPreset, "custom">, string[]> = {
-  claude: ["claude"],
-  codex: ["codex"],
-  agy: ["agy"],
-};
+function formatConvDateShort(epochSec: number): string {
+  if (!epochSec) return "";
+  const d = new Date(epochSec * 1000);
+  return `${d.getDate()} ${MONTHS_ES[d.getMonth()]}`;
+}
 
-const PRESET_SHORT: Record<Exclude<AgentPreset, "custom">, string> = {
-  claude: "claude",
-  codex: "codex",
-  agy: "agy",
-};
+function formatConvDateFull(epochSec: number): string {
+  if (!epochSec) return "";
+  const d = new Date(epochSec * 1000);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${d.getDate()} ${MONTHS_ES[d.getMonth()]} ${hh}:${mm}`;
+}
 
 export interface NewSessionFormResult {
   projectId: string | null;
@@ -32,6 +53,10 @@ interface NewSessionDialogProps {
   open: boolean;
   projects: ProjectInfo[];
   defaultProjectId: string | null;
+  selectedProjectIdOverride: string | null;
+  onConsumeProjectIdOverride: () => void;
+  onRequestAddProject: () => void;
+  suppressed?: boolean;
   canSplit: boolean;
   defaultOpenInSplit: boolean;
   defaultSplitDir: SplitDir;
@@ -44,37 +69,14 @@ function shortenPath(path: string): string {
   return homeMatch ? `~${homeMatch[1]}` : path;
 }
 
-function splitCommandString(raw: string): string[] {
-  const parts: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  for (let i = 0; i < raw.length; i += 1) {
-    const ch = raw[i];
-    if (quote) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        current += ch;
-      }
-    } else if (ch === "'" || ch === '"') {
-      quote = ch;
-    } else if (/\s/.test(ch)) {
-      if (current) {
-        parts.push(current);
-        current = "";
-      }
-    } else {
-      current += ch;
-    }
-  }
-  if (current) parts.push(current);
-  return parts;
-}
-
 export function NewSessionDialog({
   open,
   projects,
   defaultProjectId,
+  selectedProjectIdOverride,
+  onConsumeProjectIdOverride,
+  onRequestAddProject,
+  suppressed = false,
   canSplit,
   defaultOpenInSplit,
   defaultSplitDir,
@@ -86,6 +88,10 @@ export function NewSessionDialog({
   const [agent, setAgent] = useState<AgentPreset>("claude");
   const [customCmd, setCustomCmd] = useState("");
   const [customCwd, setCustomCwd] = useState("");
+  const [conversations, setConversations] = useState<ClaudeConversation[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [convDropdownOpen, setConvDropdownOpen] = useState(false);
+  const [loadingConvs, setLoadingConvs] = useState(false);
   const [title, setTitle] = useState("");
   const [titleTouched, setTitleTouched] = useState(false);
   const [openInSplit, setOpenInSplit] = useState(false);
@@ -94,6 +100,7 @@ export function NewSessionDialog({
 
   const cardRef = useRef<HTMLFormElement | null>(null);
   const selectWrapRef = useRef<HTMLDivElement | null>(null);
+  const convSelectWrapRef = useRef<HTMLDivElement | null>(null);
   const wasOpenRef = useRef(false);
 
   useEffect(() => {
@@ -110,9 +117,12 @@ export function NewSessionDialog({
         : projects[0]?.id ?? "";
     setProjectId(initialProject);
     setDropdownOpen(false);
+    setConvDropdownOpen(false);
     setAgent("claude");
     setCustomCmd("");
     setCustomCwd("");
+    setConversations([]);
+    setConversationId(null);
     setTitleTouched(false);
     setOpenInSplit(canSplit && defaultOpenInSplit);
     setError(null);
@@ -128,6 +138,52 @@ export function NewSessionDialog({
   }, [open, projects, defaultProjectId, canSplit, defaultOpenInSplit]);
 
   useEffect(() => {
+    if (!open || !selectedProjectIdOverride) return;
+    if (projects.some((p) => p.id === selectedProjectIdOverride)) {
+      setProjectId(selectedProjectIdOverride);
+      setConversationId(null);
+      onConsumeProjectIdOverride();
+    }
+  }, [open, selectedProjectIdOverride, projects, onConsumeProjectIdOverride]);
+
+  const selectedProject = projects.find((p) => p.id === projectId) ?? null;
+  const effectiveCwd = selectedProject ? selectedProject.path : customCwd.trim();
+
+  useEffect(() => {
+    if (!open || agent !== "claude") return;
+    setConversationId(null);
+    if (!effectiveCwd) {
+      setConversations([]);
+      setLoadingConvs(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingConvs(true);
+    void api
+      .claudeConversations(effectiveCwd)
+      .then((list) => {
+        if (!cancelled) {
+          setConversations(list);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setConversations([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingConvs(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, agent, effectiveCwd]);
+
+  useEffect(() => {
     if (!open || titleTouched) return;
     const proj = projects.find((p) => p.id === projectId);
     const prefix =
@@ -138,13 +194,15 @@ export function NewSessionDialog({
   }, [open, projectId, agent, customCmd, projects, titleTouched]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || suppressed) return;
+    const anyDropdownOpen = dropdownOpen || convDropdownOpen;
     const onKey = (e: KeyboardEvent) => {
-      const action = resolveDialogKey(e.key, dropdownOpen);
+      const action = resolveDialogKey(e.key, anyDropdownOpen);
       if (action === "close-dropdown") {
         e.preventDefault();
         e.stopPropagation();
         setDropdownOpen(false);
+        setConvDropdownOpen(false);
       } else if (action === "close-dialog") {
         e.preventDefault();
         e.stopPropagation();
@@ -153,34 +211,37 @@ export function NewSessionDialog({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, dropdownOpen, onClose]);
+  }, [open, suppressed, dropdownOpen, convDropdownOpen, onClose]);
 
   useEffect(() => {
-    if (!dropdownOpen) return;
+    if (!dropdownOpen && !convDropdownOpen) return;
     const onMouseDown = (e: MouseEvent) => {
-      if (
-        selectWrapRef.current &&
-        !selectWrapRef.current.contains(e.target as Node)
-      ) {
+      const target = e.target as Node;
+      if (dropdownOpen && selectWrapRef.current && !selectWrapRef.current.contains(target)) {
         setDropdownOpen(false);
+      }
+      if (
+        convDropdownOpen &&
+        convSelectWrapRef.current &&
+        !convSelectWrapRef.current.contains(target)
+      ) {
+        setConvDropdownOpen(false);
       }
     };
     window.addEventListener("mousedown", onMouseDown);
     return () => window.removeEventListener("mousedown", onMouseDown);
-  }, [dropdownOpen]);
+  }, [dropdownOpen, convDropdownOpen]);
 
   if (!open) return null;
 
-  const selectedProject = projects.find((p) => p.id === projectId) ?? null;
+  const selectedConversation =
+    conversations.find((c) => c.id === conversationId) ?? null;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
 
-    const command =
-      agent === "custom"
-        ? splitCommandString(customCmd.trim())
-        : PRESET_COMMANDS[agent];
+    const command = buildNewSessionCommand(agent, customCmd, conversationId);
     if (command.length === 0) {
       setError(es.newSessionDialog.errorNoCommand);
       return;
@@ -217,13 +278,13 @@ export function NewSessionDialog({
       aria-modal="true"
       aria-labelledby="new-session-title"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget && !suppressed) onClose();
       }}
     >
       <form
         ref={cardRef}
         tabIndex={-1}
-        className="pas-dialog-card"
+        className="pas-dialog-card is-wide"
         style={{ outline: "none" }}
         onSubmit={handleSubmit}
       >
@@ -239,7 +300,10 @@ export function NewSessionDialog({
               aria-expanded={dropdownOpen}
               aria-haspopup="listbox"
               className="pas-select-trigger"
-              onClick={() => setDropdownOpen((v) => !v)}
+              onClick={() => {
+                setConvDropdownOpen(false);
+                setDropdownOpen((v) => !v);
+              }}
             >
               <span className="pas-select-label">
                 {selectedProject
@@ -294,6 +358,22 @@ export function NewSessionDialog({
                     <Check size={13} style={{ color: "var(--acc)", flex: "none" }} />
                   )}
                 </button>
+                <div className="pas-menu-sep" />
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={false}
+                  className="pas-select-option is-accent"
+                  onClick={() => {
+                    setDropdownOpen(false);
+                    onRequestAddProject();
+                  }}
+                >
+                  <FolderPlus size={13} style={{ flex: "none" }} />
+                  <span className="pas-select-option-text">
+                    {es.newSessionDialog.addProjectOption}
+                  </span>
+                </button>
               </div>
             )}
           </div>
@@ -323,13 +403,92 @@ export function NewSessionDialog({
                 role="radio"
                 aria-checked={agent === preset}
                 className={`pas-seg-btn${agent === preset ? " is-active" : ""}`}
-                onClick={() => setAgent(preset)}
+                onClick={() => {
+                  setAgent(preset);
+                  setConvDropdownOpen(false);
+                }}
               >
                 {es.newSessionDialog.agents[preset]}
               </button>
             ))}
           </div>
         </div>
+
+        {agent === "claude" && (
+          <div className="pas-field">
+            <label id="ns-conv-label">{es.newSessionDialog.conversationLabel}</label>
+            <div ref={convSelectWrapRef} className="pas-select-wrap">
+              <button
+                type="button"
+                role="combobox"
+                aria-labelledby="ns-conv-label"
+                aria-expanded={convDropdownOpen}
+                aria-haspopup="listbox"
+                className="pas-select-trigger"
+                onClick={() => {
+                  setDropdownOpen(false);
+                  setConvDropdownOpen((v) => !v);
+                }}
+              >
+                <span className="pas-select-label">
+                  {selectedConversation
+                    ? `${selectedConversation.title}${
+                        selectedConversation.modified_at
+                          ? ` · ${formatConvDateShort(selectedConversation.modified_at)}`
+                          : ""
+                      }`
+                    : loadingConvs
+                      ? es.newSessionDialog.loadingConversations
+                      : es.newSessionDialog.newConversation}
+                </span>
+                <ChevronDown size={14} className="pas-select-chevron" />
+              </button>
+
+              {convDropdownOpen && (
+                <div className="pas-select-menu" role="listbox">
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={conversationId === null}
+                    className={`pas-select-option${conversationId === null ? " is-selected" : ""}`}
+                    onClick={() => {
+                      setConversationId(null);
+                      setConvDropdownOpen(false);
+                    }}
+                  >
+                    <span className="pas-select-option-text">
+                      {es.newSessionDialog.newConversation}
+                    </span>
+                    {conversationId === null && (
+                      <Check size={13} style={{ color: "var(--acc)", flex: "none" }} />
+                    )}
+                  </button>
+                  {conversations.map((conv) => {
+                    const isSelected = conv.id === conversationId;
+                    return (
+                      <button
+                        key={conv.id}
+                        type="button"
+                        role="option"
+                        aria-selected={isSelected}
+                        className={`pas-select-option${isSelected ? " is-selected" : ""}`}
+                        onClick={() => {
+                          setConversationId(conv.id);
+                          setConvDropdownOpen(false);
+                        }}
+                      >
+                        <span className="pas-select-option-text">{conv.title}</span>
+                        <span className="pas-select-option-meta">
+                          {formatConvDateFull(conv.modified_at)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {agent === "custom" && (
           <div className="pas-field">

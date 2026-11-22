@@ -30,6 +30,12 @@ export interface GroupInfo {
   remote_key: string | null;
 }
 
+export interface ClaudeConversation {
+  id: string;
+  title: string;
+  modified_at: number;
+}
+
 export interface SessionOutputEvent {
   id: string;
   data_b64: string;
@@ -84,6 +90,9 @@ export const api = {
       rows: params.rows ?? null,
     }),
   killSession: (id: string) => invoke<void>("kill_session", { id }),
+  removeSession: (id: string) => invoke<void>("remove_session", { id }),
+  claudeConversations: (cwd: string) =>
+    invoke<ClaudeConversation[]>("claude_conversations", { cwd }),
   sessionInput: (id: string, dataB64: string) =>
     invoke<void>("session_input", { id, dataB64 }),
   sessionResize: (id: string, cols: number, rows: number) =>

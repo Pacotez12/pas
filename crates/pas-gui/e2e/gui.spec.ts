@@ -185,4 +185,73 @@ describe("pas-gui e2e", () => {
       await ctx.cleanup();
     }
   });
+
+  it("muestra la franja al terminar una sesión y permite reabrirla en el mismo pane", async () => {
+    const ctx = new E2EContext();
+    try {
+      const repoPath = ctx.createGitRepo("proyecto-reabrir");
+      await ctx.startPasd();
+      const browser = await ctx.openApp();
+
+      await addProjectViaUi(browser, repoPath);
+      await openFakeAgentSessionViaUi(browser);
+      await waitForPaneText(browser, 0, "fake-agent listo");
+
+      await typeLineInPane(browser, 0, "echo antes-de-salir");
+      await waitForPaneText(browser, 0, "\nantes-de-salir");
+
+      const oldSessionId = await browser.$(".pas-pane").getAttribute("data-session-id");
+      expect(oldSessionId).toBeTruthy();
+
+      await typeLineInPane(browser, 0, "exit 0");
+
+      try {
+        await browser.waitUntil(
+          async () => {
+            const text = await readTextContent(browser, ".pas-pane-exited-bar");
+            return text.includes("La sesión terminó (código 0).");
+          },
+          { timeout: 10_000, interval: 100 },
+        );
+      } catch {
+        const barText = await readTextContent(browser, ".pas-pane-exited-bar");
+        const sidebarText = await readTextContent(browser, ".pas-sidebar");
+        const buf = await browser.execute(() => {
+          const host = document.querySelector(".pas-pane .pas-terminal-host") as
+            | (HTMLDivElement & { __pasReadBuffer?: () => string })
+            | null;
+          return host?.__pasReadBuffer?.() ?? "";
+        });
+        throw new Error(
+          `No apareció la franja de sesión terminada con código 0. bar=${JSON.stringify(barText)} sidebar=${JSON.stringify(sidebarText)} buf=${JSON.stringify(buf.trim())}`,
+        );
+      }
+
+      // El pane conserva lo último que mostró antes de salir.
+      await waitForPaneText(browser, 0, "antes-de-salir");
+
+      await browser.$(".pas-pane-exited-bar button.is-primary").click();
+
+      await browser.waitUntil(
+        async () => {
+          const barExists = await browser.$(".pas-pane-exited-bar").isExisting();
+          const currentId = await browser.$(".pas-pane").getAttribute("data-session-id");
+          return !barExists && Boolean(currentId) && currentId !== oldSessionId;
+        },
+        {
+          timeout: 10_000,
+          timeoutMsg: "Reabrir no reemplazó la sesión terminada en el mismo pane.",
+        },
+      );
+
+      await waitForPaneText(browser, 0, "fake-agent listo");
+      await typeLineInPane(browser, 0, "echo despues-de-reabrir");
+      await waitForPaneText(browser, 0, "\ndespues-de-reabrir");
+
+      const status = await browser.$(".pas-statusbar").getText();
+      expect(status).toContain("1 sesión");
+    } finally {
+      await ctx.cleanup();
+    }
+  });
 });

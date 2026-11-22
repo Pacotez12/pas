@@ -32,6 +32,13 @@ export const es = {
     splitRightTooltip: "Split a la derecha (Ctrl+Shift+D)",
     splitDownTooltip: "Split abajo (Ctrl+Shift+E)",
     closePaneTooltip: "Cerrar panel (Ctrl+Shift+W)",
+    exitedMessage: (code: number | null) =>
+      code === null
+        ? "La sesión terminó."
+        : `La sesión terminó (código ${code}).`,
+    closeExited: "Cerrar",
+    reopen: "Reabrir",
+    reopening: "Reabriendo…",
   },
   statusBar: {
     connected: "Conectado a pasd",
@@ -49,7 +56,11 @@ export const es = {
     title: "Nueva sesión",
     projectLabel: "Proyecto",
     noProjectOption: "Sin proyecto (carpeta actual)",
+    addProjectOption: "Agregar proyecto…",
     agentLabel: "Agente",
+    conversationLabel: "Conversación",
+    newConversation: "Nueva conversación",
+    loadingConversations: "Cargando conversaciones…",
     agents: {
       claude: "Claude Code",
       codex: "Codex",
@@ -114,6 +125,8 @@ export const es = {
       renameGroup: "renombrar el grupo",
       createSession: "abrir la sesión",
       killSession: "cerrar la sesión",
+      removeSession: "cerrar la sesión",
+      reopenSession: "reabrir la sesión",
     },
   },
 } as const;

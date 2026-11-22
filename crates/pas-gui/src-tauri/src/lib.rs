@@ -55,6 +55,8 @@ pub fn run() {
             commands::list_sessions,
             commands::create_session,
             commands::kill_session,
+            commands::remove_session,
+            commands::claude_conversations,
             commands::session_input,
             commands::session_resize,
             commands::session_snapshot,

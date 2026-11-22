@@ -22,6 +22,8 @@ interface TerminalPaneProps {
   onFocus: () => void;
   onSplit: (dir: SplitDir) => void;
   onClose: () => void;
+  onRemoveExited: () => Promise<void>;
+  onReopen: () => Promise<void>;
 }
 
 function isPasShortcut(ev: KeyboardEvent): boolean {
@@ -64,6 +66,8 @@ export function TerminalPane({
   onFocus,
   onSplit,
   onClose,
+  onRemoveExited,
+  onReopen,
 }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -72,6 +76,10 @@ export function TerminalPane({
     cols: 120,
     rows: 40,
   });
+  const [busyAction, setBusyAction] = useState<"closing" | "reopening" | null>(null);
+
+  const isExited = session?.state.state === "exited";
+  const exitedCode = session?.state.state === "exited" ? session.state.code : null;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -323,7 +331,47 @@ export function TerminalPane({
           </button>
         </div>
       </div>
-      <div ref={hostRef} className="pas-terminal-host" />
+      <div
+        ref={hostRef}
+        className={`pas-terminal-host${isExited ? " is-exited" : ""}`}
+      />
+      {isExited && (
+        <div
+          className="pas-pane-exited-bar"
+          role="status"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <span className={`pas-dot ${statusDotClass(session?.state)}`} />
+          <span className="pas-pane-exited-msg">
+            {es.pane.exitedMessage(exitedCode)}
+          </span>
+          <span className="pas-spacer" />
+          <button
+            type="button"
+            className="pas-btn pas-btn-sm"
+            disabled={busyAction !== null}
+            onClick={(e) => {
+              e.stopPropagation();
+              setBusyAction("closing");
+              void onRemoveExited().finally(() => setBusyAction(null));
+            }}
+          >
+            {es.pane.closeExited}
+          </button>
+          <button
+            type="button"
+            className="pas-btn pas-btn-sm is-primary"
+            disabled={busyAction !== null}
+            onClick={(e) => {
+              e.stopPropagation();
+              setBusyAction("reopening");
+              void onReopen().finally(() => setBusyAction(null));
+            }}
+          >
+            {busyAction === "reopening" ? es.pane.reopening : es.pane.reopen}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

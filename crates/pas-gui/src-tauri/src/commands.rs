@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use pas_core::protocol::{
-    CreateParams, CreateResult, GroupInfo, ProjectInfo, SessionInfo, SnapshotResult,
+    ClaudeConversation, CreateParams, CreateResult, GroupInfo, ProjectInfo, SessionInfo,
+    SnapshotResult,
 };
 use tauri::State;
 
@@ -113,6 +114,22 @@ pub async fn create_session(
 #[tauri::command]
 pub async fn kill_session(bridge: State<'_, Bridge>, id: String) -> Result<(), String> {
     bridge.kill_session(id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn remove_session(bridge: State<'_, Bridge>, id: String) -> Result<(), String> {
+    bridge.remove_session(id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn claude_conversations(
+    bridge: State<'_, Bridge>,
+    cwd: String,
+) -> Result<Vec<ClaudeConversation>, String> {
+    bridge
+        .claude_conversations(PathBuf::from(cwd))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

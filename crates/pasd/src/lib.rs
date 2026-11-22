@@ -1,3 +1,4 @@
+pub mod claude;
 pub mod manager;
 pub mod remote;
 pub mod rpc;

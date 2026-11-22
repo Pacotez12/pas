@@ -250,6 +250,42 @@ export function focusSession(layout: GuiLayout, sessionId: string): GuiLayout {
   };
 }
 
+function replaceNodeSession(
+  node: LayoutNode,
+  oldSessionId: string,
+  newSessionId: string,
+): LayoutNode {
+  if (node.kind === "pane") {
+    return node.sessionId === oldSessionId
+      ? { kind: "pane", sessionId: newSessionId }
+      : node;
+  }
+  return {
+    ...node,
+    children: node.children.map((child) =>
+      replaceNodeSession(child, oldSessionId, newSessionId),
+    ),
+  };
+}
+
+export function replacePaneSession(
+  layout: GuiLayout,
+  oldSessionId: string,
+  newSessionId: string,
+): GuiLayout {
+  return {
+    ...layout,
+    tabs: layout.tabs.map((tab) => ({
+      ...tab,
+      root: replaceNodeSession(tab.root, oldSessionId, newSessionId),
+      focusedSessionId:
+        tab.focusedSessionId === oldSessionId
+          ? newSessionId
+          : tab.focusedSessionId,
+    })),
+  };
+}
+
 export function cycleTab(layout: GuiLayout, delta: 1 | -1): GuiLayout {
   if (layout.tabs.length <= 1) return layout;
   const currentIdx = layout.tabs.findIndex((t) => t.id === layout.activeTabId);

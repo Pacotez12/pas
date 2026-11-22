@@ -5,6 +5,7 @@ import {
   focusSession,
   listTabSessions,
   openSessionTab,
+  replacePaneSession,
   resizeSplit,
   restoreLayout,
   splitPane,
@@ -140,5 +141,24 @@ describe("state/layout", () => {
       sizes: [35, 65],
     });
     expect(listTabSessions(layout.tabs[0].root)).toEqual(["s1", "s2"]);
+  });
+
+  it("replacePaneSession swaps session id in place preserving splits and focus", () => {
+    let layout: GuiLayout = { tabs: [], activeTabId: null };
+    layout = openSessionTab(layout, "s1");
+    layout = splitPane(layout, "s1", "row", "s2");
+    layout = resizeSplit(layout, layout.tabs[0].id, [], [35, 65]);
+
+    const replaced = replacePaneSession(layout, "s2", "s3");
+    expect(replaced.tabs[0].root).toEqual({
+      kind: "split",
+      dir: "row",
+      children: [
+        { kind: "pane", sessionId: "s1" },
+        { kind: "pane", sessionId: "s3" },
+      ],
+      sizes: [35, 65],
+    });
+    expect(replaced.tabs[0].focusedSessionId).toBe("s3");
   });
 });

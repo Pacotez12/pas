@@ -28,12 +28,14 @@ import {
   cycleTab,
   focusSession,
   openSessionTab,
+  replacePaneSession,
   resizeSplit,
   restoreLayout,
   splitPane,
   type GuiLayout,
   type SplitDir,
 } from "./state/layout";
+import { buildReopenCommand } from "./state/sessionCommand";
 
 type TextPromptState =
   | { kind: "rename-project"; project: ProjectInfo }
@@ -58,9 +60,14 @@ export function App() {
     targetSessionId: string | null;
   }>({ enabled: false, dir: "row", targetSessionId: null });
   const [addProjectOpen, setAddProjectOpen] = useState(false);
+  const [addProjectFromNewSession, setAddProjectFromNewSession] = useState(false);
+  const [pendingNewSessionProjectId, setPendingNewSessionProjectId] = useState<string | null>(
+    null,
+  );
   const [textPrompt, setTextPrompt] = useState<TextPromptState | null>(null);
   const [extraFocusTick, setExtraFocusTick] = useState(0);
   const focusTick = newSessionDialog.focusTick + extraFocusTick;
+  const reopeningIdsRef = useRef<Set<string>>(new Set());
 
   const sessionsById = useMemo(
     () => new Map(sessions.map((s) => [s.id, s])),
@@ -138,7 +145,9 @@ export function App() {
       });
       const u4 = await api.onRemoved((ev) => {
         setSessions((prev) => prev.filter((s) => s.id !== ev.id));
-        setLayout((prev) => closePane(prev, ev.id));
+        if (!reopeningIdsRef.current.has(ev.id)) {
+          setLayout((prev) => closePane(prev, ev.id));
+        }
       });
 
       if (cancelled) {
@@ -256,8 +265,48 @@ export function App() {
   }
 
   async function handleAddProject(path: string, name?: string) {
-    await api.addProject(path, name);
+    const created = await api.addProject(path, name);
     await refreshProjectsAndGroups();
+    if (addProjectFromNewSession) {
+      setPendingNewSessionProjectId(created.id);
+    }
+  }
+
+  async function handleRemoveExitedSession(sessionId: string) {
+    try {
+      await api.removeSession(sessionId);
+    } catch (err) {
+      setErrorBanner(
+        es.errors.actionFailed(es.errors.actions.removeSession, String(err)),
+      );
+    }
+  }
+
+  async function handleReopenSession(sessionId: string) {
+    const session = sessionsById.get(sessionId);
+    if (!session) return;
+    const command = buildReopenCommand(session.command);
+    reopeningIdsRef.current.add(sessionId);
+    try {
+      await api.removeSession(sessionId);
+      const created = await api.createSession({
+        projectId: session.project_id,
+        command,
+        title: session.title,
+        cwd: session.cwd,
+      });
+      const refreshed = await api.listSessions();
+      setSessions(refreshed);
+      setLayout((prev) => replacePaneSession(prev, sessionId, created.id));
+      setExtraFocusTick((n) => n + 1);
+    } catch (err) {
+      setErrorBanner(
+        es.errors.actionFailed(es.errors.actions.reopenSession, String(err)),
+      );
+      void refreshState(false);
+    } finally {
+      reopeningIdsRef.current.delete(sessionId);
+    }
   }
 
   async function handleMoveProject(projectId: string, groupId: string) {
@@ -342,7 +391,10 @@ export function App() {
           onSelectSession={(sessionId) =>
             setLayout((prev) => openSessionTab(prev, sessionId))
           }
-          onAddProject={() => setAddProjectOpen(true)}
+          onAddProject={() => {
+            setAddProjectFromNewSession(false);
+            setAddProjectOpen(true);
+          }}
           onRenameProject={(project) =>
             setTextPrompt({ kind: "rename-project", project })
           }
@@ -418,6 +470,8 @@ export function App() {
                     onClosePane={(sessionId) =>
                       setLayout((prev) => closePane(prev, sessionId))
                     }
+                    onRemoveExitedSession={handleRemoveExitedSession}
+                    onReopenSession={handleReopenSession}
                     onResizeSplit={(path, sizes) =>
                       setLayout((prev) => resizeSplit(prev, tab.id, path, sizes))
                     }
@@ -486,6 +540,13 @@ export function App() {
         open={newSessionDialog.open}
         projects={projects}
         defaultProjectId={activeSession?.project_id ?? null}
+        selectedProjectIdOverride={pendingNewSessionProjectId}
+        onConsumeProjectIdOverride={() => setPendingNewSessionProjectId(null)}
+        onRequestAddProject={() => {
+          setAddProjectFromNewSession(true);
+          setAddProjectOpen(true);
+        }}
+        suppressed={addProjectOpen}
         canSplit={activeSessionId !== null}
         defaultOpenInSplit={newSessionSplit.enabled}
         defaultSplitDir={newSessionSplit.dir}
@@ -496,8 +557,12 @@ export function App() {
       <AddProjectDialog
         open={addProjectOpen}
         onClose={() => {
+          const returnToNewSession = addProjectFromNewSession;
           setAddProjectOpen(false);
-          setExtraFocusTick((n) => n + 1);
+          setAddProjectFromNewSession(false);
+          if (!returnToNewSession) {
+            setExtraFocusTick((n) => n + 1);
+          }
         }}
         onSubmit={handleAddProject}
       />

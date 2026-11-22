@@ -4,8 +4,9 @@ use std::sync::OnceLock;
 
 use pas_core::protocol::{
     CreateResult, ERR_INVALID_PARAMS, ERR_METHOD_NOT_FOUND, ERR_SESSION_EXITED,
-    METHOD_SESSION_CREATE, METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_READ,
-    METHOD_SESSION_SEND, METHOD_SESSION_WAIT, ReadResult, Request, SessionInfo, SessionState,
+    ERR_SESSION_RUNNING, EVENT_SESSION_REMOVED, METHOD_SESSION_CREATE, METHOD_SESSION_KILL,
+    METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_REMOVE, METHOD_SESSION_SEND,
+    METHOD_SESSION_WAIT, ReadResult, Request, SessionInfo, SessionRemovedEvent, SessionState,
 };
 use pasd::manager::Manager;
 use pasd::rpc::dispatch;
@@ -190,4 +191,97 @@ async fn send_to_exited() {
     )
     .await;
     assert_eq!(r.error.unwrap().code, ERR_SESSION_EXITED);
+}
+
+#[tokio::test]
+async fn session_remove_exited_ok() {
+    let mgr = Manager::new(200);
+    let mut events = mgr.subscribe_events();
+
+    let created: CreateResult = serde_json::from_value(
+        dispatch(&mgr, req(METHOD_SESSION_CREATE, create_params("done")))
+            .await
+            .result
+            .unwrap(),
+    )
+    .unwrap();
+
+    dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 5000 }),
+        ),
+    )
+    .await;
+    dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_SEND,
+            json!({ "id": created.id, "text": "exit 0" }),
+        ),
+    )
+    .await;
+    dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "exited", "timeout_ms": 5000 }),
+        ),
+    )
+    .await;
+
+    let r = dispatch(&mgr, req(METHOD_SESSION_REMOVE, json!({ "id": created.id }))).await;
+    assert!(r.error.is_none(), "error inesperado: {:?}", r.error);
+
+    let list: Vec<SessionInfo> = serde_json::from_value(
+        dispatch(&mgr, req(METHOD_SESSION_LIST, json!({})))
+            .await
+            .result
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(list.is_empty(), "la sesión debería haber salido de list");
+
+    let mut saw_removed = false;
+    while let Ok(notif) = events.try_recv() {
+        if notif.method == EVENT_SESSION_REMOVED {
+            let ev: SessionRemovedEvent = serde_json::from_value(notif.params).unwrap();
+            if ev.id == created.id {
+                saw_removed = true;
+            }
+        }
+    }
+    assert!(saw_removed, "debería emitir session.removed");
+}
+
+#[tokio::test]
+async fn session_remove_running_is_error() {
+    let mgr = Manager::new(200);
+    let created: CreateResult = serde_json::from_value(
+        dispatch(&mgr, req(METHOD_SESSION_CREATE, create_params("alive")))
+            .await
+            .result
+            .unwrap(),
+    )
+    .unwrap();
+
+    let r = dispatch(&mgr, req(METHOD_SESSION_REMOVE, json!({ "id": created.id }))).await;
+    let err = r.error.expect("debería fallar si la sesión sigue corriendo");
+    assert_eq!(err.code, ERR_SESSION_RUNNING);
+    assert_eq!(
+        err.message,
+        "La sesión sigue corriendo. Cerrala primero con Ctrl+C o matala."
+    );
+
+    let list: Vec<SessionInfo> = serde_json::from_value(
+        dispatch(&mgr, req(METHOD_SESSION_LIST, json!({})))
+            .await
+            .result
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(list.len(), 1);
+
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;
 }

@@ -13,6 +13,8 @@ interface SplitLayoutProps {
   onFocusSession: (sessionId: string) => void;
   onSplitSession: (sessionId: string, dir: SplitDir) => void;
   onClosePane: (sessionId: string) => void;
+  onRemoveExitedSession: (sessionId: string) => Promise<void>;
+  onReopenSession: (sessionId: string) => Promise<void>;
   onResizeSplit: (path: number[], sizes: number[]) => void;
 }
 
@@ -26,6 +28,8 @@ export function SplitLayout({
   onFocusSession,
   onSplitSession,
   onClosePane,
+  onRemoveExitedSession,
+  onReopenSession,
   onResizeSplit,
 }: SplitLayoutProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -41,6 +45,8 @@ export function SplitLayout({
         onFocus={() => onFocusSession(node.sessionId)}
         onSplit={(dir) => onSplitSession(node.sessionId, dir)}
         onClose={() => onClosePane(node.sessionId)}
+        onRemoveExited={() => onRemoveExitedSession(node.sessionId)}
+        onReopen={() => onReopenSession(node.sessionId)}
       />
     );
   }
@@ -113,6 +119,8 @@ export function SplitLayout({
                 onFocusSession={onFocusSession}
                 onSplitSession={onSplitSession}
                 onClosePane={onClosePane}
+                onRemoveExitedSession={onRemoveExitedSession}
+                onReopenSession={onReopenSession}
                 onResizeSplit={onResizeSplit}
               />
             </div>

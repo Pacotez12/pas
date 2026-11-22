@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use pas_core::protocol::{
-    CreateParams, ERR_INVALID_PARAMS, ERR_SESSION_EXITED, ERR_SESSION_NOT_FOUND, ERR_SPAWN_FAILED,
-    ERR_WAIT_TIMEOUT, EVENT_SESSION_CREATED, EVENT_SESSION_REMOVED, EVENT_SESSION_STATE,
-    Notification, RpcError, SessionCreatedEvent, SessionInfo, SessionRemovedEvent, SessionState,
-    SessionStateEvent,
+    CreateParams, ERR_INVALID_PARAMS, ERR_SESSION_EXITED, ERR_SESSION_NOT_FOUND,
+    ERR_SESSION_RUNNING, ERR_SPAWN_FAILED, ERR_WAIT_TIMEOUT, EVENT_SESSION_CREATED,
+    EVENT_SESSION_REMOVED, EVENT_SESSION_STATE, Notification, RpcError, SessionCreatedEvent,
+    SessionInfo, SessionRemovedEvent, SessionState, SessionStateEvent,
 };
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -101,6 +101,39 @@ impl Manager {
         let session = self.get(id_or_title)?;
         let id = session.info().id;
         session.kill();
+        let _ = self.events_tx.send(Notification::new(
+            EVENT_SESSION_REMOVED,
+            json!(SessionRemovedEvent { id }),
+        ));
+        Ok(())
+    }
+
+    pub fn remove(&self, id_or_title: &str) -> Result<(), RpcError> {
+        let mut sessions = self.sessions.write().expect("sessions lock poisoned");
+        let id = if sessions.contains_key(id_or_title) {
+            id_or_title.to_string()
+        } else if let Some((k, _)) = sessions.iter().find(|(_, s)| s.info().title == id_or_title) {
+            k.clone()
+        } else {
+            return Err(RpcError {
+                code: ERR_SESSION_NOT_FOUND,
+                message: format!(
+                    "No hay ninguna sesión llamada {id_or_title}. Mirá las disponibles con `pas list`."
+                ),
+            });
+        };
+
+        let session = sessions.get(&id).expect("sesión recién localizada");
+        if !matches!(session.state(), SessionState::Exited { .. }) {
+            return Err(RpcError {
+                code: ERR_SESSION_RUNNING,
+                message: "La sesión sigue corriendo. Cerrala primero con Ctrl+C o matala.".into(),
+            });
+        }
+
+        sessions.remove(&id);
+        drop(sessions);
+
         let _ = self.events_tx.send(Notification::new(
             EVENT_SESSION_REMOVED,
             json!(SessionRemovedEvent { id }),

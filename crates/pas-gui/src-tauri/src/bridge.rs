@@ -7,15 +7,16 @@ use pas_core::CoreError;
 use pas_core::autostart::connect_or_spawn;
 use pas_core::client::Client;
 use pas_core::protocol::{
-    CreateParams, CreateResult, ERR_SESSION_NOT_FOUND, EVENT_SESSION_CREATED, EVENT_SESSION_OUTPUT,
-    EVENT_SESSION_REMOVED, EVENT_SESSION_STATE, GroupCreateParams, GroupInfo, GroupRenameParams,
-    IdParams, InputParams, METHOD_GROUP_CREATE, METHOD_GROUP_LIST, METHOD_GROUP_RENAME,
+    ClaudeConversation, ClaudeConversationsParams, CreateParams, CreateResult,
+    ERR_SESSION_NOT_FOUND, EVENT_SESSION_CREATED, EVENT_SESSION_OUTPUT, EVENT_SESSION_REMOVED,
+    EVENT_SESSION_STATE, GroupCreateParams, GroupInfo, GroupRenameParams, IdParams, InputParams,
+    METHOD_CLAUDE_CONVERSATIONS, METHOD_GROUP_CREATE, METHOD_GROUP_LIST, METHOD_GROUP_RENAME,
     METHOD_PROJECT_ADD, METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE, METHOD_PROJECT_REMOVE,
     METHOD_PROJECT_RENAME, METHOD_PROJECT_UNPIN, METHOD_SESSION_CREATE, METHOD_SESSION_INPUT,
-    METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_RESIZE, METHOD_SESSION_SNAPSHOT,
-    METHOD_SESSION_SUBSCRIBE, METHOD_SESSION_SUBSCRIBE_ALL, METHOD_SESSION_UNSUBSCRIBE,
-    Notification, ProjectAddParams, ProjectInfo, ProjectMoveParams, ProjectRenameParams,
-    ResizeParams, SessionInfo, SessionRemovedEvent, SnapshotResult,
+    METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_REMOVE, METHOD_SESSION_RESIZE,
+    METHOD_SESSION_SNAPSHOT, METHOD_SESSION_SUBSCRIBE, METHOD_SESSION_SUBSCRIBE_ALL,
+    METHOD_SESSION_UNSUBSCRIBE, Notification, ProjectAddParams, ProjectInfo, ProjectMoveParams,
+    ProjectRenameParams, ResizeParams, SessionInfo, SessionRemovedEvent, SnapshotResult,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -171,6 +172,19 @@ impl Bridge {
     pub async fn kill_session(&self, id: String) -> Result<(), CoreError> {
         let _: Value = self.call(METHOD_SESSION_KILL, IdParams { id }).await?;
         Ok(())
+    }
+
+    pub async fn remove_session(&self, id: String) -> Result<(), CoreError> {
+        let _: Value = self.call(METHOD_SESSION_REMOVE, IdParams { id }).await?;
+        Ok(())
+    }
+
+    pub async fn claude_conversations(
+        &self,
+        cwd: PathBuf,
+    ) -> Result<Vec<ClaudeConversation>, CoreError> {
+        self.call(METHOD_CLAUDE_CONVERSATIONS, ClaudeConversationsParams { cwd })
+            .await
     }
 
     pub async fn session_input(&self, id: String, data_b64: String) -> Result<(), CoreError> {

@@ -657,10 +657,47 @@ select:focus-visible {
   padding: 6px 8px;
   overflow: hidden;
   background: var(--bg);
+  transition: opacity 180ms ease;
+}
+
+.pas-terminal-host.is-exited {
+  opacity: 0.55;
 }
 
 .pas-terminal-host .xterm {
   height: 100%;
+}
+
+.pas-pane-exited-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--tx);
+  font-size: 12.5px;
+  transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+@starting-style {
+  .pas-pane-exited-bar {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.pas-pane-exited-msg {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pas-btn-sm {
+  padding: 5px 11px;
+  font-size: 12.5px;
 }
 
 /* Empty main area */
@@ -773,6 +810,10 @@ select:focus-visible {
   padding: 16px;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
   transition: transform 180ms var(--ease-out), opacity 180ms var(--ease-out);
+}
+
+.pas-dialog-card.is-wide {
+  width: 460px;
 }
 
 @starting-style {
@@ -892,6 +933,18 @@ select:focus-visible {
 .pas-select-option-path {
   color: var(--mu);
   font-size: 11.5px;
+}
+
+.pas-select-option-meta {
+  margin-left: auto;
+  color: var(--mu);
+  font-size: 11px;
+  flex: none;
+  white-space: nowrap;
+}
+
+.pas-select-option.is-accent {
+  color: var(--acc);
 }
 
 .pas-seg {
