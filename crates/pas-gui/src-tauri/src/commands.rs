@@ -157,3 +157,54 @@ pub async fn subscribe(bridge: State<'_, Bridge>, id: String) -> Result<(), Stri
 pub async fn unsubscribe(bridge: State<'_, Bridge>, id: String) -> Result<(), String> {
     bridge.unsubscribe(id).await.map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn reconnect(bridge: State<'_, Bridge>) {
+    bridge.reconnect();
+}
+
+fn layout_file_path() -> Result<PathBuf, String> {
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(xdg).join("pas").join("gui-layout.json"));
+    }
+    if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("pas")
+            .join("gui-layout.json"));
+    }
+    Err("No se encontró HOME ni XDG_DATA_HOME para guardar el layout.".into())
+}
+
+#[tauri::command]
+pub fn load_layout() -> Result<Option<String>, String> {
+    let path = layout_file_path()?;
+    match std::fs::read_to_string(&path) {
+        Ok(content) => Ok(Some(content)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!(
+            "No se pudo leer el layout guardado en {}: {err}",
+            path.display()
+        )),
+    }
+}
+
+#[tauri::command]
+pub fn save_layout(json: String) -> Result<(), String> {
+    let path = layout_file_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "No se pudo crear la carpeta {} para guardar el layout: {err}",
+                parent.display()
+            )
+        })?;
+    }
+    std::fs::write(&path, json).map_err(|err| {
+        format!(
+            "No se pudo guardar el layout en {}: {err}",
+            path.display()
+        )
+    })
+}

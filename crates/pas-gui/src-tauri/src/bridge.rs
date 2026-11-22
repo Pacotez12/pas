@@ -45,6 +45,7 @@ enum SubCmd {
         id: String,
         reply: oneshot::Sender<Result<(), CoreError>>,
     },
+    Reconnect,
 }
 
 pub struct Bridge {
@@ -212,6 +213,10 @@ impl Bridge {
         reply_rx.await.map_err(|_| CoreError::NotRunning)?
     }
 
+    pub fn reconnect(&self) {
+        let _ = self.sub_tx.send(SubCmd::Reconnect);
+    }
+
     pub fn shutdown(&self) {
         if let Ok(mut guard) = self.event_task.lock()
             && let Some(handle) = guard.take()
@@ -364,6 +369,7 @@ async fn run_event_loop(
                                 break;
                             }
                         }
+                        SubCmd::Reconnect => {}
                     }
                 }
             }
@@ -402,6 +408,7 @@ async fn sleep_with_sub_queue(
                         subscribed.remove(&id);
                         let _ = reply.send(Ok(()));
                     }
+                    SubCmd::Reconnect => return true,
                 }
             }
         }

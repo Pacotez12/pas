@@ -60,6 +60,9 @@ pub fn run() {
             commands::session_snapshot,
             commands::subscribe,
             commands::unsubscribe,
+            commands::reconnect,
+            commands::load_layout,
+            commands::save_layout,
         ])
         .run(tauri::generate_context!())
         .expect("No se pudo iniciar la ventana de pas. Revisá que el entorno gráfico esté disponible.");
