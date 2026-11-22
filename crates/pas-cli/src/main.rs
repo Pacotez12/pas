@@ -11,8 +11,8 @@ use pas_core::autostart;
 use pas_core::protocol::{
     CreateParams, CreateResult, ERR_WAIT_TIMEOUT, IdParams, METHOD_SESSION_CREATE,
     METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_SEND,
-    METHOD_SESSION_WAIT, ReadParams, ReadResult, SendParams, SessionInfo, SessionState, WaitParams,
-    WaitUntil, WorktreeRequest,
+    METHOD_SESSION_WAIT, ReadParams, ReadResult, SendParams, SendResult, SessionInfo, SessionState,
+    WaitParams, WaitUntil, WorktreeRequest,
 };
 use pas_core::socket::socket_path;
 use serde_json::{Value, json};
@@ -173,7 +173,7 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
             text,
             no_enter,
         } => {
-            let _: Value = client
+            let res: SendResult = client
                 .call(
                     METHOD_SESSION_SEND,
                     SendParams {
@@ -183,6 +183,9 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
                     },
                 )
                 .await?;
+            if let Some(warning) = res.warning {
+                eprintln!("{warning}");
+            }
         }
         Commands::Read { session, lines } => {
             let res: ReadResult = client

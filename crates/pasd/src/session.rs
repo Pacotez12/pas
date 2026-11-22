@@ -20,6 +20,8 @@ use crate::chat::ChatSession;
 
 const SCROLLBACK_LINES: usize = 10_000;
 const OUTPUT_BROADCAST_CAPACITY: usize = 1024;
+const SEND_ECHO_TIMEOUT: Duration = Duration::from_millis(1500);
+const SEND_NEEDLE_CHARS: usize = 20;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -67,7 +69,7 @@ struct TerminalSession {
     output_tx: broadcast::Sender<Bytes>,
     started_at: Instant,
     last_activity_ms: Arc<AtomicU64>,
-    hooks_active: AtomicBool,
+    hooks_active: Arc<AtomicBool>,
 }
 
 enum SessionKind {
@@ -273,11 +275,16 @@ impl Session {
             let _ = r_state.send(SessionState::Exited { code });
         });
 
+        let hooks_active = Arc::new(AtomicBool::new(false));
         let w_activity = Arc::clone(&last_activity_ms);
         let w_state = state_tx.clone();
         let w_parser = Arc::clone(&parser);
+        let w_hooks_active = Arc::clone(&hooks_active);
         tokio::spawn(async move {
             loop {
+                if w_hooks_active.load(Ordering::Acquire) {
+                    break;
+                }
                 let state = state_rx.borrow_and_update().clone();
                 match state {
                     SessionState::Exited { .. } => break,
@@ -294,6 +301,9 @@ impl Session {
                 let last = w_activity.load(Ordering::Acquire);
                 let elapsed = now.saturating_sub(last);
                 if elapsed >= idle_ms {
+                    if w_hooks_active.load(Ordering::Acquire) {
+                        break;
+                    }
                     let next_state = if !waiting_patterns.is_empty()
                         && last_visible_line_from_parser(&w_parser).is_some_and(|line| {
                             waiting_patterns.iter().any(|re| re.is_match(&line))
@@ -343,7 +353,7 @@ impl Session {
                 output_tx,
                 started_at,
                 last_activity_ms,
-                hooks_active: AtomicBool::new(false),
+                hooks_active,
             }),
         }))
     }
@@ -383,14 +393,66 @@ impl Session {
         self.state_tx.subscribe()
     }
 
-    pub fn send(&self, text: &str, enter: bool) -> Result<(), SessionError> {
+    pub async fn send(&self, text: &str, enter: bool) -> Result<Option<String>, SessionError> {
+        let term = self.as_terminal()?;
+        if matches!(self.state(), SessionState::Exited { .. }) {
+            return Err(SessionError::Exited {
+                title: self.title.clone(),
+            });
+        }
+
+        let needle = send_needle(text);
+        if needle.is_empty() {
+            if enter {
+                let mut buf = Vec::with_capacity(text.len() + 1);
+                buf.extend_from_slice(text.as_bytes());
+                buf.push(b'\r');
+                self.input(&buf)?;
+            } else {
+                self.input(text.as_bytes())?;
+            }
+            return Ok(None);
+        }
+
+        let before_count = screen_match_count(&term.parser, &needle);
+        let mut output_rx = term.output_tx.subscribe();
+        let mut state_rx = self.state_tx.subscribe();
+
+        self.input(text.as_bytes())?;
+        let mut appeared = wait_for_needle(
+            &term.parser,
+            &needle,
+            before_count,
+            &mut output_rx,
+            &mut state_rx,
+            SEND_ECHO_TIMEOUT,
+        )
+        .await;
+
+        if !appeared && !matches!(self.state(), SessionState::Exited { .. }) {
+            self.input(text.as_bytes())?;
+            appeared = wait_for_needle(
+                &term.parser,
+                &needle,
+                before_count,
+                &mut output_rx,
+                &mut state_rx,
+                SEND_ECHO_TIMEOUT,
+            )
+            .await;
+        }
+
         if enter {
-            let mut buf = Vec::with_capacity(text.len() + 1);
-            buf.extend_from_slice(text.as_bytes());
-            buf.push(b'\r');
-            self.input(&buf)
+            self.input(b"\r")?;
+        }
+
+        if appeared {
+            Ok(None)
         } else {
-            self.input(text.as_bytes())
+            Ok(Some(format!(
+                "{} no mostró el texto en su prompt; revisá la sesión con pas read",
+                self.title
+            )))
         }
     }
 
@@ -675,8 +737,78 @@ pub fn state_for_hook(agent: AgentKind, event: &str) -> Option<SessionState> {
         (AgentKind::Codex, "permission_request") => Some(SessionState::Waiting),
         (AgentKind::Codex, "stop") => Some(SessionState::Idle),
         (AgentKind::Agy, "PreInvocation" | "PreToolUse") => Some(SessionState::Running),
-        (AgentKind::Agy, "Stop" | "PostInvocation") => Some(SessionState::Idle),
+        (AgentKind::Agy, "Stop") => Some(SessionState::Idle),
         _ => None,
+    }
+}
+
+fn send_needle(text: &str) -> String {
+    let first_line = text
+        .lines()
+        .map(normalize_whitespace)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    first_line.chars().take(SEND_NEEDLE_CHARS).collect()
+}
+
+fn normalize_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn screen_match_count(parser: &Mutex<vt100::Parser>, needle: &str) -> usize {
+    if needle.is_empty() {
+        return 0;
+    }
+    let Ok(parser) = parser.lock() else {
+        return 0;
+    };
+    let (_, cols) = parser.screen().size();
+    let cols = cols.get();
+    let mut joined = String::new();
+    for row in parser.screen().rows(0, cols) {
+        if !joined.is_empty() {
+            joined.push(' ');
+        }
+        joined.push_str(&row);
+    }
+    normalize_whitespace(&joined).matches(needle).count()
+}
+
+async fn wait_for_needle(
+    parser: &Mutex<vt100::Parser>,
+    needle: &str,
+    before_count: usize,
+    output_rx: &mut broadcast::Receiver<Bytes>,
+    state_rx: &mut watch::Receiver<SessionState>,
+    timeout: Duration,
+) -> bool {
+    if screen_match_count(parser, needle) > before_count {
+        return true;
+    }
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep_until(deadline) => {
+                return screen_match_count(parser, needle) > before_count;
+            }
+            res = output_rx.recv() => {
+                match res {
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                        if screen_match_count(parser, needle) > before_count {
+                            return true;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        return screen_match_count(parser, needle) > before_count;
+                    }
+                }
+            }
+            res = state_rx.changed() => {
+                if res.is_err() || matches!(*state_rx.borrow(), SessionState::Exited { .. }) {
+                    return screen_match_count(parser, needle) > before_count;
+                }
+            }
+        }
     }
 }
 

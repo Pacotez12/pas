@@ -422,3 +422,183 @@ async fn create_explicit_project_id_wins() {
 
     dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": s.id }))).await;
 }
+
+#[tokio::test]
+async fn send_retries_when_first_input_is_discarded() {
+    let mgr = Manager::new(200);
+    let r = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_CREATE,
+            json!({
+                "command": [fake_agent_bin()],
+                "cwd": std::env::temp_dir(),
+                "title": "agy-drop-one",
+                "env": { "FAKE_AGENT_DROP_INPUTS": "1" },
+            }),
+        ),
+    )
+    .await;
+    let created: CreateResult = serde_json::from_value(r.result.unwrap()).unwrap();
+
+    dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 5000 }),
+        ),
+    )
+    .await;
+
+    let send_res = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_SEND,
+            json!({ "id": created.id, "text": "echo primer mensaje recuperado" }),
+        ),
+    )
+    .await;
+    assert!(send_res.error.is_none(), "error: {:?}", send_res.error);
+    assert!(
+        send_res
+            .result
+            .as_ref()
+            .and_then(|v| v.get("warning"))
+            .is_none(),
+        "no debería advertir si el reintento mostró el texto: {:?}",
+        send_res.result
+    );
+
+    dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 5000 }),
+        ),
+    )
+    .await;
+
+    let read_res = dispatch(
+        &mgr,
+        req(METHOD_SESSION_READ, json!({ "id": created.id, "lines": 5 })),
+    )
+    .await;
+    let read: ReadResult = serde_json::from_value(read_res.result.unwrap()).unwrap();
+    assert!(
+        read.text.contains("primer mensaje recuperado"),
+        "el reintento debería haber entregado el texto; salida: {:?}",
+        read.text
+    );
+
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;
+}
+
+#[tokio::test]
+async fn send_warns_when_text_never_appears() {
+    let mgr = Manager::new(200);
+    let r = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_CREATE,
+            json!({
+                "command": [fake_agent_bin()],
+                "cwd": std::env::temp_dir(),
+                "title": "agy",
+                "env": { "FAKE_AGENT_DROP_INPUTS": "5" },
+            }),
+        ),
+    )
+    .await;
+    let created: CreateResult = serde_json::from_value(r.result.unwrap()).unwrap();
+
+    dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 5000 }),
+        ),
+    )
+    .await;
+
+    let send_res = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_SEND,
+            json!({ "id": created.id, "text": "echo nunca aparece" }),
+        ),
+    )
+    .await;
+    assert!(send_res.error.is_none(), "error: {:?}", send_res.error);
+    let warning = send_res
+        .result
+        .as_ref()
+        .and_then(|v| v.get("warning"))
+        .and_then(Value::as_str);
+    assert_eq!(
+        warning,
+        Some("agy no mostró el texto en su prompt; revisá la sesión con pas read")
+    );
+
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;
+}
+
+#[tokio::test]
+async fn send_multiline_delivers_all_lines() {
+    let mgr = Manager::new(200);
+    let r = dispatch(&mgr, req(METHOD_SESSION_CREATE, create_params("multi"))).await;
+    let created: CreateResult = serde_json::from_value(r.result.unwrap()).unwrap();
+
+    dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 5000 }),
+        ),
+    )
+    .await;
+
+    let send_res = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_SEND,
+            json!({ "id": created.id, "text": "echo primera linea\necho segunda linea" }),
+        ),
+    )
+    .await;
+    assert!(send_res.error.is_none(), "error: {:?}", send_res.error);
+    assert!(
+        send_res
+            .result
+            .as_ref()
+            .and_then(|v| v.get("warning"))
+            .is_none(),
+        "no debería advertir en envío multilínea: {:?}",
+        send_res.result
+    );
+
+    dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 5000 }),
+        ),
+    )
+    .await;
+
+    let read_res = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_READ,
+            json!({ "id": created.id, "lines": 10 }),
+        ),
+    )
+    .await;
+    let read: ReadResult = serde_json::from_value(read_res.result.unwrap()).unwrap();
+    assert!(
+        read.text.contains("primera linea") && read.text.contains("segunda linea"),
+        "salida multilínea incompleta: {:?}",
+        read.text
+    );
+
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;
+}

@@ -5,8 +5,8 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use pas_core::protocol::{
-    CreateResult, METHOD_SESSION_CREATE, METHOD_SESSION_KILL, METHOD_SESSION_WAIT, Request,
-    SessionState,
+    CreateResult, ERR_WAIT_TIMEOUT, METHOD_SESSION_CREATE, METHOD_SESSION_KILL,
+    METHOD_SESSION_WAIT, Request, SessionState,
 };
 use pasd::manager::Manager;
 use pasd::rpc::dispatch;
@@ -237,7 +237,7 @@ async fn hook_sets_waiting_then_running() {
         ("codex", "user_prompt_submit", SessionState::Running),
         ("agy", "Stop", SessionState::Idle),
         ("agy", "PreInvocation", SessionState::Running),
-        ("agy", "PostInvocation", SessionState::Idle),
+        ("agy", "PostInvocation", SessionState::Running),
         ("agy", "PreToolUse", SessionState::Running),
     ];
 
@@ -434,4 +434,102 @@ async fn hook_returns_with_stdin_left_open() {
         "con stdin abierto debe salir en <400 ms, tardó {:?}",
         elapsed
     );
+}
+
+#[tokio::test]
+async fn agy_post_invocation_and_silence_do_not_set_idle_until_stop() {
+    let dir = tempdir().unwrap();
+    let sock = dir.path().join("pasd.sock");
+    let listener = bind(&sock).unwrap();
+    let mgr = Manager::new(100);
+    let server_task = tokio::spawn(serve(listener, mgr.clone()));
+
+    let created: CreateResult = serde_json::from_value(
+        dispatch(
+            &mgr,
+            req(
+                METHOD_SESSION_CREATE,
+                json!({
+                    "command": [fake_agent_bin()],
+                    "cwd": dir.path(),
+                    "title": "s-agy-hooks",
+                }),
+            ),
+        )
+        .await
+        .result
+        .unwrap(),
+    )
+    .unwrap();
+
+    dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 5000 }),
+        ),
+    )
+    .await;
+
+    let session = mgr.get(&created.id).unwrap();
+    assert_eq!(session.state(), SessionState::Idle);
+
+    for event in ["PreInvocation", "PostInvocation", "PreToolUse"] {
+        let sock_c = sock.clone();
+        let id_c = created.id.clone();
+        let event_s = event.to_string();
+        let res = tokio::task::spawn_blocking(move || {
+            run_pas_hook("agy", &event_s, Some(&id_c), &sock_c, b"{}")
+        })
+        .await
+        .unwrap();
+        assert_eq!(res.code, Some(0), "agy/{event} debe salir 0");
+        assert_eq!(
+            session.state(),
+            SessionState::Running,
+            "agy/{event} sin Stop debe mantenerse Running"
+        );
+    }
+
+    // Esperar > 3x idle_ms (100 ms): ni PostInvocation ni el silencio con hooks activos
+    // pueden pasar la sesión a Idle.
+    let wait_res = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 350 }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        wait_res.error.as_ref().map(|e| e.code),
+        Some(ERR_WAIT_TIMEOUT),
+        "wait --until idle debería hacer timeout sin Stop, devolvió: {wait_res:?}"
+    );
+    assert_eq!(session.state(), SessionState::Running);
+
+    let sock_c = sock.clone();
+    let id_c = created.id.clone();
+    let stop_res = tokio::task::spawn_blocking(move || {
+        run_pas_hook("agy", "Stop", Some(&id_c), &sock_c, b"{}")
+    })
+    .await
+    .unwrap();
+    assert_eq!(stop_res.code, Some(0));
+    assert_eq!(session.state(), SessionState::Idle);
+
+    let wait_ok = dispatch(
+        &mgr,
+        req(
+            METHOD_SESSION_WAIT,
+            json!({ "id": created.id, "until": "idle", "timeout_ms": 500 }),
+        ),
+    )
+    .await;
+    assert!(wait_ok.error.is_none());
+    let state: SessionState = serde_json::from_value(wait_ok.result.unwrap()).unwrap();
+    assert_eq!(state, SessionState::Idle);
+
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;
+    server_task.abort();
 }

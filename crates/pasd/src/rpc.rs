@@ -22,7 +22,7 @@ use pas_core::protocol::{
     METHOD_WORKTREE_BRANCHES, METHOD_WORKTREE_CREATE, METHOD_WORKTREE_LIST, METHOD_WORKTREE_MERGE,
     METHOD_WORKTREE_REMOVE, METHOD_WORKTREE_SUGGEST_BRANCH, PingResult, ProjectAddParams,
     ProjectMoveParams, ProjectRenameParams, QuotaReportParams, ReadParams, ReadResult, Request,
-    ResizeParams, Response, RpcError, SendParams, SnapshotResult, WaitParams,
+    ResizeParams, Response, RpcError, SendParams, SendResult, SnapshotResult, WaitParams,
     WorktreeBranchesParams, WorktreeCreateParams, WorktreeListParams, WorktreeRemoveParams,
     WorktreeSuggestBranchParams,
 };
@@ -60,10 +60,11 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
         METHOD_SESSION_SEND => {
             let params: SendParams = parse_params(req.params)?;
             let session = mgr.get(&params.id)?;
-            session
+            let warning = session
                 .send(&params.text, params.enter)
+                .await
                 .map_err(session_error_to_rpc)?;
-            Ok(json!({}))
+            ok_json(SendResult { warning })
         }
         METHOD_SESSION_INPUT => {
             let params: InputParams = parse_params(req.params)?;

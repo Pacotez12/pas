@@ -69,7 +69,7 @@ async fn send_echo_utf8() {
         .await
         .unwrap();
 
-    s.send("echo canción ñandú", true).unwrap();
+    s.send("echo canción ñandú", true).await.unwrap();
     s.wait(WaitUntil::Idle, Duration::from_secs(5))
         .await
         .unwrap();
@@ -87,7 +87,7 @@ async fn exit_code_reported() {
         .await
         .unwrap();
 
-    s.send("exit 3", true).unwrap();
+    s.send("exit 3", true).await.unwrap();
     let st = s
         .wait(WaitUntil::Exited, Duration::from_secs(5))
         .await
@@ -116,7 +116,7 @@ async fn flood_is_bounded() {
         .await
         .unwrap();
 
-    s.send("flood 200000", true).unwrap();
+    s.send("flood 200000", true).await.unwrap();
     s.wait(WaitUntil::Idle, Duration::from_secs(60))
         .await
         .unwrap();
@@ -137,7 +137,7 @@ async fn wait_timeout() {
         .await
         .unwrap();
 
-    s.send("sleep 3000", true).unwrap();
+    s.send("sleep 3000", true).await.unwrap();
     let err = s
         .wait(WaitUntil::Exited, Duration::from_millis(500))
         .await
@@ -182,7 +182,7 @@ async fn strips_inherited_agent_env_but_keeps_explicit() {
         ("ORCA_SESSION", "(vacío)"),
         ("CLAUDE_CODE_EXPLICIT", "respetada"),
     ] {
-        s.send(&format!("env {var}"), true).unwrap();
+        s.send(&format!("env {var}"), true).await.unwrap();
         s.wait(WaitUntil::Idle, Duration::from_secs(5))
             .await
             .unwrap();

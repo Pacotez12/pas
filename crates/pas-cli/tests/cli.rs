@@ -316,3 +316,44 @@ fn cli_new_worktree() {
 
     env.pas().args(["kill", "wt-cli"]).assert().success();
 }
+
+#[test]
+fn send_prints_warning_to_stderr_when_text_never_appears() {
+    let env = TestEnv::new();
+
+    env.pas()
+        .args([
+            "new",
+            "--title",
+            "agy",
+            "--",
+            "env",
+            "FAKE_AGENT_DROP_INPUTS=5",
+            &fake_agent_bin(),
+        ])
+        .assert()
+        .success();
+
+    env.pas()
+        .args(["wait", "agy", "--until", "idle", "--timeout", "10"])
+        .assert()
+        .success();
+
+    let out = env
+        .pas()
+        .args(["send", "agy", "echo perdido"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "pas send debería salir 0 aun con aviso; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("agy no mostró el texto en su prompt; revisá la sesión con pas read"),
+        "esperaba aviso en stderr, salió: {stderr:?}"
+    );
+
+    env.pas().args(["kill", "agy"]).assert().success();
+}
