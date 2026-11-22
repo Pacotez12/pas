@@ -1078,3 +1078,187 @@ async fn chat_create_without_adapter_gives_clear_error() {
         "El chat de Codex necesita el adaptador codex-acp. Instalalo desde Cuentas o abrí la sesión en modo Terminal."
     );
 }
+
+#[tokio::test]
+async fn permission_tool_update_uses_permission_title_and_visual_follows_text() {
+    let dir = tempdir().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    let mgr = Manager::with_config(
+        150,
+        store,
+        Some(dir.path().join("accounts")),
+        None,
+        Config::default(),
+        Arc::new(FakeNotifier::default()),
+    );
+    let mut events_rx = mgr.subscribe_events();
+
+    let script = json!([
+        { "type": "text", "chunks": ["Busco ", "el archivo."] },
+        { "type": "tool", "title": "Leyó src/export.ts", "status": "completed" },
+        {
+            "type": "permission",
+            "title": "Claude quiere ejecutar un comando",
+            "detail": "npm test",
+            "after_allow": "Permiso aprobado, aplico el cambio."
+        },
+        {
+            "type": "diff",
+            "path": "src/export.ts",
+            "old_text": "export const v = 1;",
+            "new_text": "export const v = 2;"
+        },
+        {
+            "type": "visual",
+            "file": "mockup-exportar.html",
+            "html": "<html><body><h1>Vista previa</h1></body></html>",
+            "message": "Te dejo el visual:"
+        }
+    ])
+    .to_string();
+
+    let created: CreateResult = serde_json::from_value(
+        dispatch(
+            &mgr,
+            req(
+                METHOD_SESSION_CREATE,
+                json!({
+                    "mode": "chat",
+                    "command": [fake_acp_agent_bin()],
+                    "cwd": dir.path(),
+                    "title": "order-and-title-test",
+                    "env": { "FAKE_ACP_SCRIPT": script },
+                }),
+            ),
+        )
+        .await
+        .result
+        .unwrap(),
+    )
+    .unwrap();
+
+    let prompt_res = dispatch(
+        &mgr,
+        req(
+            "chat.prompt",
+            json!({ "id": created.id, "text": "hacelo" }),
+        ),
+    )
+    .await;
+    assert!(prompt_res.error.is_none(), "{:?}", prompt_res.error);
+
+    let request_id = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let notif = events_rx.recv().await.unwrap();
+            if notif.method == "chat.event"
+                && notif.params["id"] == created.id
+                && notif.params["event"]["type"] == "permission_request"
+            {
+                return notif.params["event"]["request_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+            }
+        }
+    })
+    .await
+    .expect("timeout esperando permission_request");
+
+    let perm_res = dispatch(
+        &mgr,
+        req(
+            "chat.permission",
+            json!({
+                "id": created.id,
+                "request_id": request_id,
+                "choice": "allow",
+            }),
+        ),
+    )
+    .await;
+    assert!(perm_res.error.is_none(), "{:?}", perm_res.error);
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Ok(notif) = events_rx.recv().await {
+            if notif.method == "chat.event"
+                && notif.params["id"] == created.id
+                && notif.params["event"]["type"] == "agent_message_end"
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("timeout esperando agent_message_end");
+
+    let hist_res = dispatch(&mgr, req("chat.history", json!({ "id": created.id }))).await;
+    let history: Vec<Value> = serde_json::from_value(hist_res.result.unwrap()).unwrap();
+
+    // Ningún tool_call puede tener título vacío ni el id crudo.
+    for ev in &history {
+        if ev["type"] == "tool_call" {
+            let title = ev["title"].as_str().unwrap_or("");
+            assert!(
+                !title.is_empty(),
+                "tool_call sin título en historial: {ev:?}"
+            );
+            assert_ne!(
+                title,
+                ev["id"].as_str().unwrap_or(""),
+                "tool_call usa id crudo como título: {ev:?}"
+            );
+        }
+    }
+
+    // La actualización de la herramienta del permiso debe heredar el título del permiso.
+    assert!(
+        history.iter().any(|e| {
+            e["type"] == "tool_call"
+                && e["id"] == request_id
+                && e["title"] == "Claude quiere ejecutar un comando"
+        }),
+        "falta tool_call del permiso con su título en historial: {history:?}"
+    );
+
+    // El orden debe ser: permission_resolved < "Permiso aprobado..." < diff < "Te dejo el visual:" < visual.
+    let idx_resolved = history
+        .iter()
+        .position(|e| e["type"] == "permission_resolved")
+        .expect("falta permission_resolved");
+    let idx_after_allow = history
+        .iter()
+        .position(|e| {
+            e["type"] == "agent_chunk"
+                && e["text"]
+                    .as_str()
+                    .is_some_and(|t| t.contains("Permiso aprobado"))
+        })
+        .expect("falta texto after_allow");
+    let idx_diff = history
+        .iter()
+        .position(|e| e["type"] == "diff")
+        .expect("falta diff");
+    let idx_vis_text = history
+        .iter()
+        .position(|e| {
+            e["type"] == "agent_chunk"
+                && e["text"]
+                    .as_str()
+                    .is_some_and(|t| t.contains("Te dejo el visual:"))
+        })
+        .expect("falta texto del visual");
+    let idx_visual = history
+        .iter()
+        .position(|e| e["type"] == "visual" && e["file"] == "mockup-exportar.html")
+        .expect("falta evento visual");
+
+    assert!(
+        idx_resolved < idx_after_allow
+            && idx_after_allow < idx_diff
+            && idx_diff < idx_vis_text
+            && idx_vis_text < idx_visual,
+        "orden incorrecto en historial (resolved={idx_resolved}, after_allow={idx_after_allow}, diff={idx_diff}, vis_text={idx_vis_text}, visual={idx_visual}): {history:?}"
+    );
+
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;
+}

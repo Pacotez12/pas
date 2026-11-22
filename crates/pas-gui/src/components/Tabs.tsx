@@ -1,4 +1,4 @@
-import { Plus, X } from "lucide-react";
+import { MessageSquare, Plus, Terminal, X } from "lucide-react";
 import type { SessionInfo, SessionState } from "../api/pas";
 import { es } from "../i18n/es";
 import type { TabLayout } from "../state/layout";
@@ -50,6 +50,11 @@ export function Tabs({
             }}
           >
             <span className={`pas-dot ${statusDotClass(focused?.state)}`} />
+            {focused?.mode === "chat" ? (
+              <MessageSquare size={12} strokeWidth={2} className="pas-tab-mode-icon" />
+            ) : (
+              <Terminal size={12} strokeWidth={2} className="pas-tab-mode-icon" />
+            )}
             <span>{label}</span>
             <button
               type="button"

@@ -291,6 +291,7 @@ export function App() {
       command: form.command,
       title: form.title,
       cwd: form.cwd,
+      mode: form.mode,
     });
     const refreshed = await api.listSessions();
     setSessions(refreshed);
@@ -301,6 +302,27 @@ export function App() {
       setLayout((prev) => splitPane(prev, targetId, form.splitDir, created.id));
     } else {
       setLayout((prev) => openSessionTab(prev, created.id));
+    }
+  }
+
+  async function handleOpenInTerminal(session: SessionInfo, command: string[]) {
+    try {
+      const created = await api.createSession({
+        projectId: session.project_id,
+        accountId: session.account_id,
+        command,
+        title: session.title,
+        cwd: session.cwd,
+        mode: "terminal",
+      });
+      const refreshed = await api.listSessions();
+      setSessions(refreshed);
+      setLayout((prev) => openSessionTab(prev, created.id));
+      setExtraFocusTick((n) => n + 1);
+    } catch (err) {
+      setErrorBanner(
+        es.errors.actionFailed(es.errors.actions.openInTerminal, String(err)),
+      );
     }
   }
 
@@ -334,7 +356,10 @@ export function App() {
   async function handleReopenSession(sessionId: string) {
     const session = sessionsById.get(sessionId);
     if (!session) return;
-    const command = buildReopenCommand(session.command);
+    const command =
+      session.mode === "chat"
+        ? [...session.command]
+        : buildReopenCommand(session.command);
     reopeningIdsRef.current.add(sessionId);
     try {
       await api.removeSession(sessionId);
@@ -344,6 +369,7 @@ export function App() {
         command,
         title: session.title,
         cwd: session.cwd,
+        mode: session.mode,
       });
       const refreshed = await api.listSessions();
       setSessions(refreshed);
@@ -593,6 +619,7 @@ export function App() {
                     isVisible={isVisible}
                     focusTick={focusTick}
                     sessionsById={sessionsById}
+                    accountsById={accountsById}
                     onFocusSession={(sessionId) =>
                       setLayout((prev) => focusSession(prev, sessionId))
                     }
@@ -602,6 +629,7 @@ export function App() {
                     onClosePane={(sessionId) =>
                       setLayout((prev) => closePane(prev, sessionId))
                     }
+                    onOpenInTerminal={handleOpenInTerminal}
                     onRemoveExitedSession={handleRemoveExitedSession}
                     onReopenSession={handleReopenSession}
                     onResizeSplit={(path, sizes) =>

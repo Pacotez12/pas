@@ -152,7 +152,15 @@ export function Sidebar({
       ? accountsById.get(session.account_id)
       : undefined;
     const stateLabel = sessionStateLabel(session.state);
-    const metaText = account ? `${account.name} · ${stateLabel}` : stateLabel;
+    const metaParts: string[] = [];
+    if (session.mode === "chat") {
+      metaParts.push(es.chat.modeTag);
+    }
+    if (account) {
+      metaParts.push(account.name);
+    }
+    metaParts.push(stateLabel);
+    const metaText = metaParts.join(" · ");
     return (
       <button
         key={session.id}

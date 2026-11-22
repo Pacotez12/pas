@@ -236,6 +236,7 @@ impl ChatSession {
             let notif_chat_dir = chat_dir.clone();
 
             let perm_sink = sink.clone();
+            let perm_titles = Arc::clone(&tool_titles);
             let perm_state_tx = driver_state_tx.clone();
             let perm_pending = Arc::clone(&driver_pending);
             let perm_allowed = Arc::clone(&driver_allowed);
@@ -269,13 +270,27 @@ impl ChatSession {
                 )
                 .on_receive_request(
                     async move |req: RequestPermissionRequest, responder, cx| {
+                        let raw_id = req.tool_call.tool_call_id.0.to_string();
+                        let title = req
+                            .tool_call
+                            .fields
+                            .title
+                            .clone()
+                            .filter(|t| !t.trim().is_empty())
+                            .unwrap_or_else(|| "Permiso requerido".to_string());
+                        if !raw_id.is_empty()
+                            && let Ok(mut titles) = perm_titles.lock()
+                        {
+                            titles.entry(raw_id.clone()).or_insert_with(|| title.clone());
+                        }
+
                         let tool_key = req
                             .tool_call
                             .fields
                             .name
                             .clone()
                             .or_else(|| req.tool_call.fields.title.clone())
-                            .unwrap_or_else(|| req.tool_call.tool_call_id.0.to_string());
+                            .unwrap_or_else(|| raw_id.clone());
 
                         let already_allowed = perm_allowed
                             .lock()
@@ -289,13 +304,6 @@ impl ChatSession {
                             return responder.respond(RequestPermissionResponse::new(outcome));
                         }
 
-                        let raw_id = req.tool_call.tool_call_id.0.to_string();
-                        let title = req
-                            .tool_call
-                            .fields
-                            .title
-                            .clone()
-                            .unwrap_or_else(|| "Permiso requerido".to_string());
                         let detail = req.tool_call.fields.raw_input.as_ref().map(|v| match v {
                             Value::String(s) => s.clone(),
                             other => other.to_string(),
@@ -634,13 +642,21 @@ fn handle_session_update(
     match update {
         SessionUpdate::AgentMessageChunk(chunk) => {
             if let ContentBlock::Text(text) = chunk.content {
-                sink.emit(ChatEvent::AgentChunk { text: text.text });
+                let chunk_text = text.text;
+                sink.emit(ChatEvent::AgentChunk {
+                    text: chunk_text.clone(),
+                });
+                if let Some(dir) = chat_dir {
+                    scan_named_visuals(dir, &chunk_text, seen_visuals, sink);
+                }
             }
         }
         SessionUpdate::ToolCall(tc) => {
             let id = tc.tool_call_id.0.to_string();
             let title = tc.title.clone();
-            if let Ok(mut titles) = tool_titles.lock() {
+            if !title.is_empty()
+                && let Ok(mut titles) = tool_titles.lock()
+            {
                 titles.insert(id.clone(), title.clone());
             }
             sink.emit(ChatEvent::ToolCall {
@@ -662,25 +678,33 @@ fn handle_session_update(
         SessionUpdate::ToolCallUpdate(upd) => {
             let id = upd.tool_call_id.0.to_string();
             if let Some(ref title) = upd.fields.title
+                && !title.is_empty()
                 && let Ok(mut titles) = tool_titles.lock()
             {
                 titles.insert(id.clone(), title.clone());
             }
             if upd.fields.status.is_some() || upd.fields.title.is_some() {
-                let title = upd.fields.title.clone().unwrap_or_else(|| {
-                    tool_titles
-                        .lock()
-                        .ok()
-                        .and_then(|t| t.get(&id).cloned())
-                        .unwrap_or_default()
-                });
-                let status = upd
+                let title = upd
                     .fields
-                    .status
-                    .map(format_tool_status)
-                    .unwrap_or("in_progress")
-                    .to_string();
-                sink.emit(ChatEvent::ToolCall { id, title, status });
+                    .title
+                    .clone()
+                    .filter(|t| !t.is_empty())
+                    .or_else(|| {
+                        tool_titles
+                            .lock()
+                            .ok()
+                            .and_then(|t| t.get(&id).cloned())
+                            .filter(|t| !t.is_empty())
+                    });
+                if let Some(title) = title {
+                    let status = upd
+                        .fields
+                        .status
+                        .map(format_tool_status)
+                        .unwrap_or("in_progress")
+                        .to_string();
+                    sink.emit(ChatEvent::ToolCall { id, title, status });
+                }
             }
             if let Some(contents) = upd.fields.content {
                 for content in contents {
@@ -700,9 +724,30 @@ fn handle_session_update(
         }
         _ => {}
     }
+}
 
-    if let Some(dir) = chat_dir {
-        scan_new_visuals(dir, seen_visuals, sink);
+fn scan_named_visuals(dir: &Path, text: &str, seen: &Mutex<HashSet<String>>, sink: &EventSink) {
+    if !text.contains(".html") && !text.contains(".htm") {
+        return;
+    }
+    let mut found = Vec::new();
+    collect_html_files(dir, dir, &mut found);
+    found.sort();
+
+    let mut new_files = Vec::new();
+    if let Ok(mut guard) = seen.lock() {
+        for rel in found {
+            let file_name = Path::new(&rel)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(rel.as_str());
+            if (text.contains(&rel) || text.contains(file_name)) && guard.insert(rel.clone()) {
+                new_files.push(rel);
+            }
+        }
+    }
+    for file in new_files {
+        sink.emit(ChatEvent::Visual { file });
     }
 }
 
@@ -849,6 +894,38 @@ mod tests {
                 PermissionChoice::Allow
             ))
             .is_none()
+        );
+    }
+
+    #[test]
+    fn unknown_tool_update_without_title_is_ignored() {
+        use agent_client_protocol::v1::schema::{ToolCallUpdate, ToolCallUpdateFields};
+
+        let history = Arc::new(Mutex::new(Vec::new()));
+        let (events_tx, _rx) = broadcast::channel(16);
+        let sink = EventSink {
+            session_id: "s1".into(),
+            history: Arc::clone(&history),
+            history_file: None,
+            events_tx,
+        };
+        let tool_titles = Mutex::new(HashMap::new());
+        let seen_visuals = Mutex::new(HashSet::new());
+
+        handle_session_update(
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                "tc-desconocida",
+                ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+            )),
+            &sink,
+            &tool_titles,
+            None,
+            &seen_visuals,
+        );
+
+        assert!(
+            history.lock().unwrap().is_empty(),
+            "no debe emitirse tool_call sin título para un id desconocido"
         );
     }
 }

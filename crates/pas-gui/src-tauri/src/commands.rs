@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use pas_core::protocol::{
-    AccountInfo, AccountQuota, AcpAdapterStatus, AgentKind, ClaudeConversation, CreateParams,
-    CreateResult, GroupInfo, ProjectInfo, SessionInfo, SnapshotResult,
+    AccountInfo, AccountQuota, AcpAdapterStatus, AgentKind, ChatEvent, ClaudeConversation,
+    CreateParams, CreateResult, GroupInfo, Mode, PermissionChoice, ProjectInfo, SessionInfo,
+    SnapshotResult,
 };
 use tauri::State;
 
@@ -98,6 +99,7 @@ pub async fn create_session(
     cwd: String,
     cols: Option<u16>,
     rows: Option<u16>,
+    mode: Option<Mode>,
 ) -> Result<CreateResult, String> {
     bridge
         .create_session(CreateParams {
@@ -109,7 +111,7 @@ pub async fn create_session(
             rows: rows.unwrap_or(40),
             project_id,
             account_id,
-            mode: pas_core::protocol::Mode::Terminal,
+            mode: mode.unwrap_or(Mode::Terminal),
         })
         .await
         .map_err(|e| e.to_string())
@@ -224,6 +226,38 @@ pub async fn acp_install(
 }
 
 #[tauri::command]
+pub async fn chat_prompt(
+    bridge: State<'_, Bridge>,
+    id: String,
+    text: String,
+) -> Result<(), String> {
+    bridge.chat_prompt(id, text).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn chat_permission(
+    bridge: State<'_, Bridge>,
+    id: String,
+    request_id: String,
+    choice: PermissionChoice,
+) -> Result<(), String> {
+    bridge
+        .chat_permission(id, request_id, choice)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn chat_cancel(bridge: State<'_, Bridge>, id: String) -> Result<(), String> {
+    bridge.chat_cancel(id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn chat_history(bridge: State<'_, Bridge>, id: String) -> Result<Vec<ChatEvent>, String> {
+    bridge.chat_history(id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn chat_terminal_command(
     bridge: State<'_, Bridge>,
     id: String,
@@ -232,6 +266,77 @@ pub async fn chat_terminal_command(
         .chat_terminal_command(id)
         .await
         .map_err(|e| e.to_string())
+}
+
+fn pas_data_dir_path() -> Result<PathBuf, String> {
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(xdg).join("pas"));
+    }
+    if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(home).join(".local").join("share").join("pas"));
+    }
+    Err("No se encontró HOME ni XDG_DATA_HOME para ubicar los datos de pas.".into())
+}
+
+#[tauri::command]
+pub fn pas_data_dir() -> Result<String, String> {
+    Ok(pas_data_dir_path()?.to_string_lossy().into_owned())
+}
+
+fn resolve_visual_path(session_id: &str, file: &str) -> Result<PathBuf, String> {
+    if session_id.is_empty()
+        || session_id.contains('/')
+        || session_id.contains('\\')
+        || session_id == "."
+        || session_id == ".."
+    {
+        return Err("Identificador de sesión inválido.".into());
+    }
+    let rel = Path::new(file);
+    if rel.is_absolute()
+        || rel.components().any(|c| {
+            matches!(
+                c,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err("Ruta de visual inválida.".into());
+    }
+    let chat_dir = pas_data_dir_path()?.join("chats").join(session_id);
+    let canon_dir = std::fs::canonicalize(&chat_dir)
+        .map_err(|err| format!("No se encontró la carpeta del chat: {err}"))?;
+    let candidate = canon_dir.join(rel);
+    let canon_file = std::fs::canonicalize(&candidate)
+        .map_err(|err| format!("No se encontró el visual {file}: {err}"))?;
+    if !canon_file.starts_with(&canon_dir) {
+        return Err("El archivo está fuera de la carpeta del chat.".into());
+    }
+    Ok(canon_file)
+}
+
+#[tauri::command]
+pub fn chat_read_visual(session_id: String, file: String) -> Result<String, String> {
+    let path = resolve_visual_path(&session_id, &file)?;
+    std::fs::read_to_string(&path)
+        .map_err(|err| format!("No se pudo leer el visual {file}: {err}"))
+}
+
+#[tauri::command]
+pub fn chat_open_visual(session_id: String, file: String) -> Result<(), String> {
+    let path = resolve_visual_path(&session_id, &file)?;
+    #[cfg(target_os = "linux")]
+    let status = std::process::Command::new("xdg-open").arg(&path).spawn();
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("open").arg(&path).spawn();
+    #[cfg(target_os = "windows")]
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "start", ""])
+        .arg(&path)
+        .spawn();
+    status
+        .map(|_| ())
+        .map_err(|err| format!("No se pudo abrir el visual en el navegador: {err}"))
 }
 
 #[tauri::command]

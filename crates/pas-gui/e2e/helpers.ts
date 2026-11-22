@@ -13,6 +13,7 @@ export const PAS_GUI_BIN = path.join(E2E_TARGET_DEBUG, "pas-gui");
 export const PASD_BIN = path.join(E2E_TARGET_DEBUG, "pasd");
 export const PAS_CLI_BIN = path.join(E2E_TARGET_DEBUG, "pas");
 export const FAKE_AGENT_BIN = path.join(E2E_TARGET_DEBUG, "fake-agent");
+export const FAKE_ACP_AGENT_BIN = path.join(E2E_TARGET_DEBUG, "fake-acp-agent");
 export const TAURI_DRIVER_BIN =
   process.env.TAURI_DRIVER_BIN || path.join(os.homedir(), ".cargo/bin/tauri-driver");
 export const NATIVE_DRIVER_BIN =
@@ -24,6 +25,7 @@ function ensurePrerequisites() {
     ["pasd", PASD_BIN],
     ["pas", PAS_CLI_BIN],
     ["fake-agent", FAKE_AGENT_BIN],
+    ["fake-acp-agent", FAKE_ACP_AGENT_BIN],
     ["tauri-driver", TAURI_DRIVER_BIN],
     ["WebKitWebDriver", NATIVE_DRIVER_BIN],
   ] as const;
@@ -197,6 +199,24 @@ export class E2EContext {
     fs.writeFileSync(target, `#!/bin/sh\nexec "${FAKE_AGENT_BIN}" "$@"\n`, {
       mode: 0o755,
     });
+    if (!this.extraPathDirs.includes(binDir)) {
+      this.extraPathDirs.push(binDir);
+    }
+    return binDir;
+  }
+
+  createFakeAcpAdapterAlias(binName: string, script?: unknown[]): string {
+    const binDir = path.join(this.tmpDir, "fake-bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const target = path.join(binDir, binName);
+    const scriptFile = path.join(this.tmpDir, `${binName}-script.json`);
+    let body = "#!/bin/sh\n";
+    if (script !== undefined) {
+      fs.writeFileSync(scriptFile, JSON.stringify(script), "utf8");
+      body += `export FAKE_ACP_SCRIPT="$(cat "${scriptFile}")"\n`;
+    }
+    body += `exec "${FAKE_ACP_AGENT_BIN}" "$@"\n`;
+    fs.writeFileSync(target, body, { mode: 0o755 });
     if (!this.extraPathDirs.includes(binDir)) {
       this.extraPathDirs.push(binDir);
     }

@@ -414,4 +414,217 @@ describe("pas-gui e2e", () => {
       await ctx.cleanup();
     }
   });
+
+  it("abre un chat con fake-acp-agent, aprueba permiso, muestra diff y visual, y conserva todo al reabrir", async () => {
+    const ctx = new E2EContext();
+    try {
+      const repoPath = ctx.createGitRepo("proyecto-chat");
+      ctx.createFakeAcpAdapterAlias("claude-agent-acp", [
+        { type: "text", chunks: ["Busco ", "el archivo."] },
+        { type: "tool", title: "Leyó src/export.ts", status: "completed" },
+        {
+          type: "permission",
+          title: "Claude quiere ejecutar un comando",
+          detail: "npm test",
+          after_allow: "Permiso aprobado, aplico el cambio.",
+        },
+        {
+          type: "diff",
+          path: "src/export.ts",
+          old_text: "export const v = 1;",
+          new_text: "export const v = 2;\nexport const csv = true;",
+        },
+        {
+          type: "visual",
+          file: "mockup-exportar.html",
+          html: "<html><body><h1>Vista previa CSV</h1></body></html>",
+          message: "Te dejo el visual:",
+        },
+      ]);
+
+      await ctx.startPasd();
+      const browser1 = await ctx.openApp();
+
+      await addProjectViaUi(browser1, repoPath);
+
+      // Abrir nueva sesión en modo Chat.
+      await browser1.$(".pas-new-btn").click();
+      await browser1.$(".pas-dialog-card").waitForDisplayed({ timeout: 10_000 });
+
+      const modeRadios = await browser1.$$(
+        '.pas-dialog-card [aria-label="Modo"] button[role="radio"]',
+      );
+      let clickedChat = false;
+      for (const radio of modeRadios) {
+        if ((await radio.getText()).trim() === "Chat") {
+          await radio.click();
+          clickedChat = true;
+          break;
+        }
+      }
+      expect(clickedChat).toBe(true);
+
+      const submitBtn = await browser1.$('.pas-dialog-card button[type="submit"]');
+      expect((await submitBtn.getText()).trim()).toBe("Abrir chat");
+      await submitBtn.click();
+
+      await browser1.waitUntil(
+        async () =>
+          browser1.execute(() => document.querySelector(".pas-dialog-backdrop") === null),
+        { timeout: 10_000, interval: 50 },
+      );
+
+      // Confirmar que se abrió un ChatPane y que el botón Abrir en terminal aparece para Claude.
+      await browser1.$(".pas-chat-pane").waitForDisplayed({ timeout: 10_000 });
+      await browser1.waitUntil(
+        async () =>
+          (await readTextContent(browser1, ".pas-chat-pane .pas-pane-header")).includes(
+            "Abrir en terminal",
+          ),
+        { timeout: 10_000, timeoutMsg: "No apareció 'Abrir en terminal' en el chat de Claude." },
+      );
+
+      // Enviar mensaje con Enter desde el composer.
+      const composer = await browser1.$(".pas-chat-ta");
+      await composer.click();
+      await composer.setValue("Agregá exportación CSV");
+      await browser1.keys(["\uE007"]);
+
+      // Esperar respuesta en streaming, herramienta y tarjeta de permiso (con estado waiting).
+      await browser1.waitUntil(
+        async () => {
+          const feedText = await readTextContent(browser1, ".pas-chat-feed");
+          const permExists = await browser1.$(".pas-chat-perm").isExisting();
+          const waitDot = await browser1.$(".pas-tab.is-active .pas-dot.is-wait").isExisting();
+          return (
+            feedText.includes("Agregá exportación CSV") &&
+            feedText.includes("Busco el archivo.") &&
+            feedText.includes("Leyó src/export.ts") &&
+            permExists &&
+            waitDot
+          );
+        },
+        {
+          timeout: 15_000,
+          interval: 100,
+          timeoutMsg: "No llegaron los mensajes iniciales o la tarjeta de permiso en el chat.",
+        },
+      );
+
+      // Aprobar permiso con el botón Permitir.
+      await browser1.$(".pas-chat-perm-actions button.is-primary").click();
+
+      // Esperar permiso resuelto, diff y visual en iframe aislado.
+      await browser1.waitUntil(
+        async () => {
+          const permResolved =
+            (await browser1.$(".pas-chat-perm").getAttribute("data-resolution")) === "allow";
+          const feedText = await readTextContent(browser1, ".pas-chat-feed");
+          const diffExists = await browser1.$(".pas-chat-diff").isExisting();
+          const frameExists = await browser1.$(".pas-chat-vis-frame").isExisting();
+          return (
+            permResolved &&
+            feedText.includes("Permiso aprobado, aplico el cambio.") &&
+            diffExists &&
+            frameExists
+          );
+        },
+        {
+          timeout: 15_000,
+          interval: 100,
+          timeoutMsg: "No aparecieron el permiso resuelto, el diff y el visual tras aprobar.",
+        },
+      );
+
+      const sandboxAttr = await browser1.$(".pas-chat-vis-frame").getAttribute("sandbox");
+      expect(sandboxAttr).toBe("allow-scripts");
+      const visHeadText = await readTextContent(browser1, ".pas-chat-vis-head");
+      expect(visHeadText).toContain("mockup-exportar.html");
+      expect(visHeadText).toContain("Abrir en el navegador");
+
+      // Verificar títulos de herramientas (nunca el id crudo "tc-2") y orden exacto en el feed.
+      const feedSnapshot = await browser1.execute(() => {
+        const feed = document.querySelector(".pas-chat-feed");
+        const children = feed ? Array.from(feed.children) : [];
+        return children.map((el) => ({
+          cls: el.className,
+          text: (el.textContent ?? "").trim(),
+        }));
+      });
+
+      const toolTitles = await browser1.execute(() =>
+        Array.from(document.querySelectorAll(".pas-chat-tool-title")).map((el) =>
+          (el.textContent ?? "").trim(),
+        ),
+      );
+      expect(toolTitles).not.toContain("tc-2");
+      expect(toolTitles).toContain("Claude quiere ejecutar un comando");
+
+      const idxPerm = feedSnapshot.findIndex(
+        (c) => c.cls.includes("pas-chat-perm") && c.text.includes("Permitido"),
+      );
+      const idxAfterAllow = feedSnapshot.findIndex(
+        (c) =>
+          c.cls.includes("pas-chat-ai") &&
+          c.text.includes("Permiso aprobado, aplico el cambio."),
+      );
+      const idxEditTool = feedSnapshot.findIndex(
+        (c) => c.cls.includes("pas-chat-tool") && c.text.includes("Editó src/export.ts"),
+      );
+      const idxDiff = feedSnapshot.findIndex(
+        (c) => c.cls.includes("pas-chat-diff") && c.text.includes("src/export.ts"),
+      );
+      const idxVisText = feedSnapshot.findIndex(
+        (c) => c.cls.includes("pas-chat-ai") && c.text.includes("Te dejo el visual:"),
+      );
+      const idxVisual = feedSnapshot.findIndex(
+        (c) => c.cls.includes("pas-chat-vis") && c.text.includes("mockup-exportar.html"),
+      );
+
+      expect(idxPerm).toBeGreaterThanOrEqual(0);
+      expect(idxAfterAllow).toBeGreaterThan(idxPerm);
+      expect(idxEditTool).toBeGreaterThan(idxAfterAllow);
+      expect(idxDiff).toBeGreaterThan(idxEditTool);
+      expect(idxVisText).toBeGreaterThan(idxDiff);
+      expect(idxVisual).toBeGreaterThan(idxVisText);
+
+      // Esperar que el layout se guarde en gui-layout.json.
+      await browser1.waitUntil(
+        async () => fs.existsSync(ctx.layoutFile) && fs.readFileSync(ctx.layoutFile, "utf8").includes('"tabs"'),
+        { timeout: 5_000 },
+      );
+
+      // Cerrar y reabrir la app (pasd sigue vivo) y verificar que todo reaparece sin duplicados.
+      await ctx.closeApp();
+      const browser2 = await ctx.openApp();
+
+      await browser2.$(".pas-chat-pane").waitForDisplayed({ timeout: 10_000 });
+      await browser2.waitUntil(
+        async () => {
+          const feedText = await readTextContent(browser2, ".pas-chat-feed");
+          const permResolved =
+            (await browser2.$(".pas-chat-perm").getAttribute("data-resolution")) === "allow";
+          const diffCount = (await browser2.$$(".pas-chat-diff")).length;
+          const visCount = (await browser2.$$(".pas-chat-vis-frame")).length;
+          const userCount = (await browser2.$$(".pas-chat-me")).length;
+          return (
+            feedText.includes("Agregá exportación CSV") &&
+            feedText.includes("Busco el archivo.") &&
+            feedText.includes("Permiso aprobado, aplico el cambio.") &&
+            permResolved &&
+            diffCount === 1 &&
+            visCount === 1 &&
+            userCount === 1
+          );
+        },
+        {
+          timeout: 15_000,
+          interval: 100,
+          timeoutMsg: "Al reabrir la app el historial del chat no se restauró igual y sin duplicados.",
+        },
+      );
+    } finally {
+      await ctx.cleanup();
+    }
+  });
 });

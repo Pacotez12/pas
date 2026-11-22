@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, ChevronDown, FolderPlus } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, FolderPlus } from "lucide-react";
 import {
   api,
   type AccountInfo,
+  type AcpAdapterStatus,
+  type AgentKind,
   type ClaudeConversation,
   type ProjectInfo,
   type Quota,
+  type SessionMode,
 } from "../api/pas";
 import { es } from "../i18n/es";
 import { filterAccountsByAgent, formatQuotaInline } from "../state/accounts";
@@ -53,6 +56,7 @@ export interface NewSessionFormResult {
   command: string[];
   title: string | null;
   cwd: string;
+  mode: SessionMode;
   openInSplit: boolean;
   splitDir: SplitDir;
 }
@@ -97,6 +101,7 @@ export function NewSessionDialog({
   onClose,
   onSubmit,
 }: NewSessionDialogProps) {
+  const [mode, setMode] = useState<SessionMode>("terminal");
   const [projectId, setProjectId] = useState<string>("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [agent, setAgent] = useState<AgentPreset>("claude");
@@ -108,6 +113,11 @@ export function NewSessionDialog({
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [convDropdownOpen, setConvDropdownOpen] = useState(false);
   const [loadingConvs, setLoadingConvs] = useState(false);
+  const [acpStatuses, setAcpStatuses] = useState<AcpAdapterStatus[]>([]);
+  const [pasDataDir, setPasDataDir] = useState("~/.local/share/pas");
+  const [confirmInstallAgent, setConfirmInstallAgent] = useState<AgentKind | null>(null);
+  const [installingAdapter, setInstallingAdapter] = useState(false);
+  const [installError, setInstallError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [titleTouched, setTitleTouched] = useState(false);
   const [openInSplit, setOpenInSplit] = useState(false);
@@ -138,6 +148,7 @@ export function NewSessionDialog({
         ? defaultAccountId
         : claudeAccounts[0]?.id ?? null;
 
+    setMode("terminal");
     setProjectId(initialProject);
     setDropdownOpen(false);
     setAccountDropdownOpen(false);
@@ -148,10 +159,22 @@ export function NewSessionDialog({
     setCustomCwd("");
     setConversations([]);
     setConversationId(null);
+    setConfirmInstallAgent(null);
+    setInstallingAdapter(false);
+    setInstallError(null);
     setTitleTouched(false);
     setOpenInSplit(canSplit && defaultOpenInSplit);
     setError(null);
     setSubmitting(false);
+
+    void api
+      .acpStatus()
+      .then((list) => setAcpStatuses(list))
+      .catch(() => setAcpStatuses([]));
+    void api
+      .pasDataDir()
+      .then((dir) => setPasDataDir(dir))
+      .catch(() => {});
 
     const proj = projects.find((p) => p.id === initialProject);
     setTitle(proj ? `claude · ${proj.name}` : "claude");
@@ -186,7 +209,7 @@ export function NewSessionDialog({
     agentAccounts.find((a) => a.id === accountId) ?? null;
 
   useEffect(() => {
-    if (!open || agent !== "claude") return;
+    if (!open || mode !== "terminal" || agent !== "claude") return;
     setConversationId(null);
     if (!effectiveCwd) {
       setConversations([]);
@@ -217,7 +240,7 @@ export function NewSessionDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, agent, effectiveCwd, accountId]);
+  }, [open, mode, agent, effectiveCwd, accountId]);
 
   useEffect(() => {
     if (!open || titleTouched) return;
@@ -281,11 +304,43 @@ export function NewSessionDialog({
   const selectedConversation =
     conversations.find((c) => c.id === conversationId) ?? null;
 
+  const chatAgentKind: AgentKind | null =
+    mode === "chat" && agent !== "custom" ? agent : null;
+  const currentAdapter = chatAgentKind
+    ? acpStatuses.find((s) => s.agent === chatAgentKind) ?? null
+    : null;
+  const adapterMissing = Boolean(currentAdapter && !currentAdapter.installed);
+  const installCommand =
+    currentAdapter?.package
+      ? `npm install --prefix ${pasDataDir}/acp ${currentAdapter.package}`
+      : null;
+
+  async function handleInstallAdapter(targetAgent: AgentKind) {
+    setInstallingAdapter(true);
+    setInstallError(null);
+    try {
+      await api.acpInstall(targetAgent);
+      const updated = await api.acpStatus();
+      setAcpStatuses(updated);
+      setConfirmInstallAgent(null);
+    } catch (err) {
+      setInstallError(String(err));
+    } finally {
+      setInstallingAdapter(false);
+    }
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
 
-    const command = buildNewSessionCommand(agent, customCmd, conversationId);
+    const effectiveAgent: AgentPreset =
+      mode === "chat" && agent === "custom" ? "claude" : agent;
+    const command = buildNewSessionCommand(
+      effectiveAgent,
+      customCmd,
+      mode === "terminal" ? conversationId : null,
+    );
     if (command.length === 0) {
       setError(es.newSessionDialog.errorNoCommand);
       return;
@@ -301,10 +356,11 @@ export function NewSessionDialog({
     try {
       await onSubmit({
         projectId: selectedProject ? selectedProject.id : null,
-        accountId: agent === "custom" ? null : selectedAccount?.id ?? null,
+        accountId: effectiveAgent === "custom" ? null : selectedAccount?.id ?? null,
         command,
         title: title.trim() || null,
         cwd,
+        mode,
         openInSplit: canSplit && openInSplit,
         splitDir: defaultSplitDir,
       });
@@ -334,6 +390,34 @@ export function NewSessionDialog({
         onSubmit={handleSubmit}
       >
         <h4 id="new-session-title">{es.newSessionDialog.title}</h4>
+
+        <div className="pas-field">
+          <label>{es.newSessionDialog.modeLabel}</label>
+          <div className="pas-seg" role="radiogroup" aria-label={es.newSessionDialog.modeLabel}>
+            {(["terminal", "chat"] as SessionMode[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="radio"
+                aria-checked={mode === m}
+                className={`pas-seg-btn${mode === m ? " is-active" : ""}`}
+                onClick={() => {
+                  setMode(m);
+                  setConfirmInstallAgent(null);
+                  setInstallError(null);
+                  setError(null);
+                  if (m === "chat" && agent === "custom") {
+                    setAgent("claude");
+                    const nextAccounts = filterAccountsByAgent(accounts, "claude");
+                    setAccountId(nextAccounts[0]?.id ?? null);
+                  }
+                }}
+              >
+                {es.newSessionDialog.modes[m]}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div className="pas-field">
           <label id="ns-project-label">{es.newSessionDialog.projectLabel}</label>
@@ -441,8 +525,12 @@ export function NewSessionDialog({
 
         <div className="pas-field">
           <label>{es.newSessionDialog.agentLabel}</label>
-          <div className="pas-seg" role="radiogroup">
-            {(["claude", "codex", "agy", "custom"] as AgentPreset[]).map((preset) => (
+          <div className="pas-seg" role="radiogroup" aria-label={es.newSessionDialog.agentLabel}>
+            {(
+              (mode === "chat"
+                ? ["claude", "codex", "agy"]
+                : ["claude", "codex", "agy", "custom"]) as AgentPreset[]
+            ).map((preset) => (
               <button
                 key={preset}
                 type="button"
@@ -455,6 +543,9 @@ export function NewSessionDialog({
                   setAccountId(nextAccounts[0]?.id ?? null);
                   setAccountDropdownOpen(false);
                   setConvDropdownOpen(false);
+                  setConfirmInstallAgent(null);
+                  setInstallError(null);
+                  setError(null);
                 }}
               >
                 {es.newSessionDialog.agents[preset]}
@@ -462,6 +553,70 @@ export function NewSessionDialog({
             ))}
           </div>
         </div>
+
+        {mode === "chat" && adapterMissing && currentAdapter && (
+          <div className="pas-adapter-alert" role="status">
+            <div className="pas-adapter-alert-head">
+              <AlertCircle size={14} strokeWidth={2} style={{ flex: "none", marginTop: 1 }} />
+              <span>
+                {currentAdapter.agent === "agy"
+                  ? es.newSessionDialog.adapterMissingAgy
+                  : es.newSessionDialog.adapterMissing(
+                      es.newSessionDialog.agents[currentAdapter.agent],
+                      currentAdapter.bin,
+                    )}
+              </span>
+            </div>
+
+            {currentAdapter.package && installCommand && (
+              confirmInstallAgent === currentAdapter.agent ? (
+                <div className="pas-adapter-confirm">
+                  <p className="pas-adapter-confirm-intro">
+                    {es.newSessionDialog.installAdapterConfirmIntro}
+                  </p>
+                  <div className="pas-hooks-path">{installCommand}</div>
+                  {installError && <p className="pas-field-error">{installError}</p>}
+                  <div className="pas-adapter-confirm-actions">
+                    <button
+                      type="button"
+                      className="pas-btn pas-btn-sm"
+                      disabled={installingAdapter}
+                      onClick={() => {
+                        setConfirmInstallAgent(null);
+                        setInstallError(null);
+                      }}
+                    >
+                      {es.newSessionDialog.cancel}
+                    </button>
+                    <button
+                      type="button"
+                      className="pas-btn pas-btn-sm is-primary"
+                      disabled={installingAdapter}
+                      onClick={() => void handleInstallAdapter(currentAdapter.agent)}
+                    >
+                      {installingAdapter
+                        ? es.newSessionDialog.installingAdapter
+                        : es.newSessionDialog.installAdapterConfirmButton}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="pas-adapter-alert-actions">
+                  <button
+                    type="button"
+                    className="pas-btn pas-btn-sm is-primary"
+                    onClick={() => {
+                      setInstallError(null);
+                      setConfirmInstallAgent(currentAdapter.agent);
+                    }}
+                  >
+                    {es.newSessionDialog.installAdapterButton}
+                  </button>
+                </div>
+              )
+            )}
+          </div>
+        )}
 
         {agent !== "custom" && (
           <div className="pas-field">
@@ -535,7 +690,7 @@ export function NewSessionDialog({
           </div>
         )}
 
-        {agent === "claude" && (
+        {mode === "terminal" && agent === "claude" && (
           <div className="pas-field">
             <label id="ns-conv-label">{es.newSessionDialog.conversationLabel}</label>
             <div ref={convSelectWrapRef} className="pas-select-wrap">
@@ -662,11 +817,13 @@ export function NewSessionDialog({
           <button
             type="submit"
             className="pas-btn is-primary"
-            disabled={submitting}
+            disabled={submitting || installingAdapter || (mode === "chat" && adapterMissing)}
           >
             {submitting
               ? es.newSessionDialog.submitting
-              : es.newSessionDialog.submit}
+              : mode === "chat"
+                ? es.newSessionDialog.submitChat
+                : es.newSessionDialog.submit}
           </button>
         </div>
       </form>

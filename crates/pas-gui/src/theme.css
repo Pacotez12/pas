@@ -1372,6 +1372,474 @@ select:focus-visible {
   margin: 4px 2px;
 }
 
+/* Tab mode icon */
+.pas-tab-mode-icon {
+  flex: none;
+  opacity: 0.78;
+}
+
+.pas-tab.is-active .pas-tab-mode-icon {
+  opacity: 0.95;
+}
+
+/* Chat pane */
+.pas-chat-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--acc);
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: opacity 140ms ease, transform 140ms var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .pas-chat-link:hover:not(:disabled) {
+    opacity: 0.85;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+}
+
+.pas-chat-link:active {
+  transform: scale(0.97);
+}
+
+.pas-chat-link:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.pas-chat-feed {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  font-size: 13px;
+  background: var(--bg);
+  transition: opacity 180ms ease;
+}
+
+.pas-chat-feed.is-exited {
+  opacity: 0.55;
+}
+
+.pas-chat-feed::-webkit-scrollbar {
+  width: 6px;
+}
+
+.pas-chat-feed::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 3px;
+}
+
+.pas-chat-empty {
+  margin: auto 0;
+  text-align: center;
+  padding: 24px 16px;
+  color: var(--mu);
+}
+
+.pas-chat-empty-title {
+  margin: 0 0 4px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--tx);
+}
+
+.pas-chat-empty-body {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.pas-chat-me {
+  align-self: flex-end;
+  max-width: 70%;
+  background: #1f1f27;
+  border: 1px solid #2a2a33;
+  padding: 8px 12px;
+  border-radius: 12px 12px 4px 12px;
+  color: #e8e8ee;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.pas-chat-ai {
+  max-width: 80%;
+  color: var(--tx);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.pas-chat-ai.is-streaming::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 13px;
+  margin-left: 3px;
+  vertical-align: -2px;
+  background: var(--acc);
+  border-radius: 1px;
+  opacity: 0.75;
+}
+
+/* Collapsible tool row */
+.pas-chat-tool {
+  max-width: 80%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: transparent;
+  overflow: hidden;
+}
+
+.pas-chat-tool-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  color: #a8a8b6;
+  font-size: 12px;
+  text-align: left;
+  transition: background-color 120ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .pas-chat-tool-head:hover {
+    background: var(--panel);
+  }
+}
+
+.pas-chat-tool-chev {
+  flex: none;
+  color: var(--mu);
+}
+
+.pas-chat-tool-title {
+  color: var(--tx);
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pas-chat-tool-status {
+  flex: none;
+  color: var(--mu);
+  font-size: 11.5px;
+}
+
+.pas-chat-tool-status.is-ok {
+  color: var(--mu);
+}
+
+.pas-chat-tool-status.is-err {
+  color: var(--err);
+}
+
+.pas-chat-tool-body {
+  border-top: 1px solid var(--line);
+  padding: 6px 10px;
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--mu);
+  background: var(--panel);
+  user-select: text;
+}
+
+.pas-chat-tool-body code {
+  font-family: var(--font-mono);
+  color: var(--tx);
+}
+
+/* Diff card */
+.pas-chat-diff {
+  max-width: 80%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: #101016;
+  overflow: hidden;
+  user-select: text;
+}
+
+.pas-chat-diff-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--tx);
+}
+
+.pas-chat-diff-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pas-chat-diff-stats {
+  color: var(--mu);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  flex: none;
+}
+
+.pas-chat-diff-body {
+  padding: 5px 0 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+
+.pas-chat-diff-line {
+  padding: 0 10px;
+  white-space: pre;
+  color: var(--tx);
+}
+
+.pas-chat-diff-line.is-add {
+  color: var(--ok);
+}
+
+.pas-chat-diff-line.is-del {
+  color: var(--err);
+}
+
+.pas-chat-diff-line.is-hunk {
+  color: var(--mu);
+}
+
+/* Permission card */
+.pas-chat-perm {
+  max-width: 80%;
+  border: 1px solid #6b4a24;
+  background: rgba(240, 163, 94, 0.07);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  transition: border-color 180ms var(--ease-out), background-color 180ms var(--ease-out);
+}
+
+.pas-chat-perm.is-resolved {
+  border-color: var(--line);
+  background: var(--panel);
+}
+
+.pas-chat-perm-title {
+  font-weight: 600;
+  color: #f3d2ad;
+  line-height: 1.4;
+}
+
+.pas-chat-perm.is-resolved .pas-chat-perm-title {
+  color: var(--tx);
+}
+
+.pas-chat-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--tx);
+  margin-top: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.pas-chat-perm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.pas-chat-perm-status {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--mu);
+}
+
+/* Inline visual card */
+.pas-chat-vis {
+  max-width: 560px;
+  width: 100%;
+  border: 1px solid #2a2a33;
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.pas-chat-vis-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid #2a2a33;
+  font-size: 11.5px;
+  color: #a8a8b6;
+}
+
+.pas-chat-vis-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pas-chat-vis-frame {
+  display: block;
+  width: 100%;
+  height: 260px;
+  border: none;
+  background: #ffffff;
+}
+
+.pas-chat-vis-placeholder {
+  padding: 14px 12px;
+  font-size: 12px;
+  color: var(--mu);
+}
+
+/* Chat error items */
+.pas-chat-error {
+  max-width: 80%;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--banner-bg);
+  border: 1px solid var(--banner-border);
+  color: var(--banner-tx);
+  font-size: 12.5px;
+  line-height: 1.45;
+  user-select: text;
+}
+
+.pas-chat-inline-error {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--banner-border);
+  background: var(--banner-bg);
+  color: var(--banner-tx);
+  font-size: 12px;
+}
+
+.pas-chat-inline-error span {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Composer */
+.pas-chat-composer {
+  flex: none;
+  border-top: 1px solid var(--line);
+  padding: 10px 14px;
+  background: var(--panel);
+}
+
+.pas-chat-ta {
+  width: 100%;
+  display: block;
+  resize: none;
+  background: var(--bg);
+  border: 1px solid #2a2a33;
+  border-radius: var(--radius-lg);
+  padding: 9px 10px;
+  color: var(--tx);
+  font: inherit;
+  line-height: 1.45;
+  min-height: 38px;
+  max-height: 160px;
+  outline: none;
+  user-select: text;
+  transition: border-color 140ms ease;
+}
+
+.pas-chat-ta::placeholder {
+  color: #6a6a78;
+}
+
+.pas-chat-ta:focus {
+  border-color: var(--acc);
+}
+
+.pas-chat-cbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 11.5px;
+}
+
+.pas-chat-hint {
+  color: var(--mu);
+}
+
+/* Missing ACP adapter alert inside NewSessionDialog */
+.pas-adapter-alert {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid #6b4a24;
+  background: rgba(240, 163, 94, 0.07);
+  color: #f3d2ad;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pas-adapter-alert-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.pas-adapter-alert-actions {
+  margin-top: 8px;
+}
+
+.pas-adapter-confirm {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(240, 163, 94, 0.25);
+}
+
+.pas-adapter-confirm-intro {
+  margin: 0 0 6px;
+  color: var(--tx);
+  font-size: 12px;
+}
+
+.pas-adapter-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

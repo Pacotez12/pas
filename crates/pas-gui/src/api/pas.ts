@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+export type SessionMode = "terminal" | "chat";
+
 export type SessionState =
   | { state: "running" }
   | { state: "waiting" }
@@ -16,6 +18,42 @@ export interface SessionInfo {
   created_at: number;
   project_id: string | null;
   account_id: string | null;
+  mode: SessionMode;
+}
+
+export type PermissionChoice = "allow" | "allow_session" | "deny";
+
+export type ChatEvent =
+  | { type: "user_message"; text: string }
+  | { type: "agent_chunk"; text: string }
+  | { type: "agent_message_end" }
+  | { type: "tool_call"; id: string; title: string; status: string }
+  | { type: "diff"; path: string; unified: string }
+  | {
+      type: "permission_request";
+      request_id: string;
+      title: string;
+      detail?: string | null;
+    }
+  | {
+      type: "permission_resolved";
+      request_id: string;
+      choice: PermissionChoice;
+    }
+  | { type: "visual"; file: string }
+  | { type: "error"; message: string };
+
+export interface ChatEventNotification {
+  id: string;
+  event: ChatEvent;
+}
+
+export interface AcpAdapterStatus {
+  agent: AgentKind;
+  bin: string;
+  installed: boolean;
+  path: string | null;
+  package: string | null;
 }
 
 export type AgentKind = "claude" | "codex" | "agy";
@@ -128,6 +166,7 @@ export const api = {
     cwd: string;
     cols?: number;
     rows?: number;
+    mode?: SessionMode;
   }) =>
     invoke<{ id: string }>("create_session", {
       projectId: params.projectId,
@@ -137,6 +176,7 @@ export const api = {
       cwd: params.cwd,
       cols: params.cols ?? null,
       rows: params.rows ?? null,
+      mode: params.mode ?? "terminal",
     }),
   killSession: (id: string) => invoke<void>("kill_session", { id }),
   removeSession: (id: string) => invoke<void>("remove_session", { id }),
@@ -167,6 +207,24 @@ export const api = {
     invoke<AccountInfo>("uninstall_account_hooks", { id }),
   listQuotas: () => invoke<AccountQuota[]>("list_quotas"),
   defaultAgyDir: () => invoke<string>("default_agy_dir"),
+  pasDataDir: () => invoke<string>("pas_data_dir"),
+
+  acpStatus: () => invoke<AcpAdapterStatus[]>("acp_status"),
+  acpInstall: (agent: AgentKind) =>
+    invoke<AcpAdapterStatus>("acp_install", { agent }),
+
+  chatPrompt: (id: string, text: string) =>
+    invoke<void>("chat_prompt", { id, text }),
+  chatPermission: (id: string, requestId: string, choice: PermissionChoice) =>
+    invoke<void>("chat_permission", { id, requestId, choice }),
+  chatCancel: (id: string) => invoke<void>("chat_cancel", { id }),
+  chatHistory: (id: string) => invoke<ChatEvent[]>("chat_history", { id }),
+  chatTerminalCommand: (id: string) =>
+    invoke<string[] | null>("chat_terminal_command", { id }),
+  chatReadVisual: (sessionId: string, file: string) =>
+    invoke<string>("chat_read_visual", { sessionId, file }),
+  chatOpenVisual: (sessionId: string, file: string) =>
+    invoke<void>("chat_open_visual", { sessionId, file }),
 
   sessionInput: (id: string, dataB64: string) =>
     invoke<void>("session_input", { id, dataB64 }),
@@ -198,6 +256,8 @@ export const api = {
     listen<QuotaChangedEvent>("pas://quota_changed", (e) => cb(e.payload)),
   onQuotaWarning: (cb: (ev: QuotaWarningEvent) => void): Promise<UnlistenFn> =>
     listen<QuotaWarningEvent>("pas://quota_warning", (e) => cb(e.payload)),
+  onChatEvent: (cb: (ev: ChatEventNotification) => void): Promise<UnlistenFn> =>
+    listen<ChatEventNotification>("pas://chat_event", (e) => cb(e.payload)),
   onConnection: (cb: (status: ConnectionStatus) => void): Promise<UnlistenFn> =>
     listen<ConnectionStatus>("pas://connection", (e) => cb(e.payload)),
 };

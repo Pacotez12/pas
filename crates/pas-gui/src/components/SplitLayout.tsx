@@ -1,6 +1,7 @@
 import { Fragment, useRef } from "react";
-import type { SessionInfo } from "../api/pas";
+import type { AccountInfo, SessionInfo } from "../api/pas";
 import type { LayoutNode, SplitDir } from "../state/layout";
+import { ChatPane } from "./ChatPane";
 import { TerminalPane } from "./TerminalPane";
 
 interface SplitLayoutProps {
@@ -10,9 +11,11 @@ interface SplitLayoutProps {
   isVisible: boolean;
   focusTick: number;
   sessionsById: Map<string, SessionInfo>;
+  accountsById: Map<string, AccountInfo>;
   onFocusSession: (sessionId: string) => void;
   onSplitSession: (sessionId: string, dir: SplitDir) => void;
   onClosePane: (sessionId: string) => void;
+  onOpenInTerminal: (session: SessionInfo, command: string[]) => Promise<void>;
   onRemoveExitedSession: (sessionId: string) => Promise<void>;
   onReopenSession: (sessionId: string) => Promise<void>;
   onResizeSplit: (path: number[], sizes: number[]) => void;
@@ -25,9 +28,11 @@ export function SplitLayout({
   isVisible,
   focusTick,
   sessionsById,
+  accountsById,
   onFocusSession,
   onSplitSession,
   onClosePane,
+  onOpenInTerminal,
   onRemoveExitedSession,
   onReopenSession,
   onResizeSplit,
@@ -35,10 +40,32 @@ export function SplitLayout({
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   if (node.kind === "pane") {
+    const session = sessionsById.get(node.sessionId);
+    if (session?.mode === "chat") {
+      const account = session.account_id
+        ? accountsById.get(session.account_id)
+        : undefined;
+      return (
+        <ChatPane
+          sessionId={node.sessionId}
+          session={session}
+          account={account}
+          isFocused={node.sessionId === focusedSessionId}
+          isVisible={isVisible}
+          focusTick={focusTick}
+          onFocus={() => onFocusSession(node.sessionId)}
+          onSplit={(dir) => onSplitSession(node.sessionId, dir)}
+          onClose={() => onClosePane(node.sessionId)}
+          onOpenInTerminal={onOpenInTerminal}
+          onRemoveExited={() => onRemoveExitedSession(node.sessionId)}
+          onReopen={() => onReopenSession(node.sessionId)}
+        />
+      );
+    }
     return (
       <TerminalPane
         sessionId={node.sessionId}
-        session={sessionsById.get(node.sessionId)}
+        session={session}
         isFocused={node.sessionId === focusedSessionId}
         isVisible={isVisible}
         focusTick={focusTick}
@@ -116,9 +143,11 @@ export function SplitLayout({
                 isVisible={isVisible}
                 focusTick={focusTick}
                 sessionsById={sessionsById}
+                accountsById={accountsById}
                 onFocusSession={onFocusSession}
                 onSplitSession={onSplitSession}
                 onClosePane={onClosePane}
+                onOpenInTerminal={onOpenInTerminal}
                 onRemoveExitedSession={onRemoveExitedSession}
                 onReopenSession={onReopenSession}
                 onResizeSplit={onResizeSplit}
