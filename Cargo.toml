@@ -6,4 +6,5 @@ members = [
   "crates/pasd",
   "crates/pas-gui/src-tauri",
   "tools/fake-agent",
+  "tools/fake-acp-agent",
 ]
