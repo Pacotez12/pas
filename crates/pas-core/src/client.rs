@@ -5,16 +5,18 @@ use std::path::Path;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tokio::io::BufReader;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UnixStream;
 
 use crate::CoreError;
 use crate::protocol::{Notification, Request, Response};
-use crate::socket::{read_msg, validate_socket_path, write_msg};
+use crate::socket::{validate_socket_path, write_msg};
 
 #[derive(Debug)]
 pub struct Client {
     stream: BufReader<UnixStream>,
+    // Vec + read_until: cancel-safe in tokio::select! (read_line is not).
+    read_buf: Vec<u8>,
     next_id: u64,
     pending_events: VecDeque<Notification>,
 }
@@ -28,9 +30,19 @@ impl Client {
         })?;
         Ok(Self {
             stream: BufReader::new(stream),
+            read_buf: Vec::new(),
             next_id: 1,
             pending_events: VecDeque::new(),
         })
+    }
+
+    async fn read_value(&mut self) -> Result<Option<Value>, CoreError> {
+        let n = self.stream.read_until(b'\n', &mut self.read_buf).await?;
+        if n == 0 && self.read_buf.is_empty() {
+            return Ok(None);
+        }
+        let line = std::mem::take(&mut self.read_buf);
+        Ok(Some(serde_json::from_slice(&line)?))
     }
 
     pub async fn call<P: Serialize, R: DeserializeOwned>(
@@ -50,7 +62,7 @@ impl Client {
         write_msg(&mut self.stream, &req).await?;
 
         loop {
-            let msg: Value = read_msg(&mut self.stream).await?.ok_or_else(|| {
+            let msg: Value = self.read_value().await?.ok_or_else(|| {
                 CoreError::Io(std::io::Error::new(
                     ErrorKind::UnexpectedEof,
                     "pasd cerró la conexión antes de responder. Reintentá la operación.",
@@ -89,7 +101,7 @@ impl Client {
         }
 
         loop {
-            let Some(msg) = read_msg::<Value>(&mut self.stream).await? else {
+            let Some(msg) = self.read_value().await? else {
                 return Ok(None);
             };
             if !has_id(&msg) {
