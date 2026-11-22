@@ -42,6 +42,7 @@ pub const EVENT_SESSION_OUTPUT: &str = "session.output";
 pub const EVENT_SESSION_STATE: &str = "session.state";
 pub const EVENT_SESSION_CREATED: &str = "session.created";
 pub const EVENT_SESSION_REMOVED: &str = "session.removed";
+pub const EVENT_SESSION_FOCUS_REQUEST: &str = "session.focus_request";
 pub const EVENT_QUOTA_CHANGED: &str = "quota.changed";
 pub const EVENT_QUOTA_WARNING: &str = "quota.warning";
 
@@ -312,6 +313,11 @@ pub struct SessionCreatedEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRemovedEvent {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionFocusRequestEvent {
     pub id: String,
 }
 

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -6,9 +7,10 @@ use std::time::Duration;
 use pas_core::protocol::{
     AccountQuota, AgentKind, CreateParams, ERR_INVALID_PARAMS, ERR_SESSION_EXITED,
     ERR_SESSION_NOT_FOUND, ERR_SESSION_RUNNING, ERR_SPAWN_FAILED, ERR_WAIT_TIMEOUT,
-    EVENT_QUOTA_CHANGED, EVENT_QUOTA_WARNING, EVENT_SESSION_CREATED, EVENT_SESSION_REMOVED,
-    EVENT_SESSION_STATE, Notification, QuotaReportParams, RpcError, SessionCreatedEvent,
-    SessionInfo, SessionRemovedEvent, SessionState, SessionStateEvent,
+    EVENT_QUOTA_CHANGED, EVENT_QUOTA_WARNING, EVENT_SESSION_CREATED, EVENT_SESSION_FOCUS_REQUEST,
+    EVENT_SESSION_REMOVED, EVENT_SESSION_STATE, Notification, QuotaReportParams, RpcError,
+    SessionCreatedEvent, SessionFocusRequestEvent, SessionInfo, SessionRemovedEvent, SessionState,
+    SessionStateEvent,
 };
 use pas_core::socket::socket_path as default_socket_path;
 use serde_json::json;
@@ -16,6 +18,8 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 use crate::accounts;
+use crate::config::Config;
+use crate::notify::{NoopNotifier, Notifier, WaitingNotice};
 use crate::quota::{self, QuotaTracker, QuotaUpdate};
 use crate::rpc::store_error_to_rpc;
 use crate::session::{Session, SessionError};
@@ -23,7 +27,6 @@ use crate::store::{Store, StoreError};
 
 const EVENTS_BROADCAST_CAPACITY: usize = 256;
 
-#[derive(Debug)]
 pub struct Manager {
     idle_ms: u64,
     sessions: RwLock<HashMap<String, Arc<Session>>>,
@@ -32,6 +35,18 @@ pub struct Manager {
     accounts_dir: Option<PathBuf>,
     socket_path: Option<PathBuf>,
     quotas: QuotaTracker,
+    config: Config,
+    notifier: Arc<dyn Notifier>,
+}
+
+impl fmt::Debug for Manager {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Manager")
+            .field("idle_ms", &self.idle_ms)
+            .field("accounts_dir", &self.accounts_dir)
+            .field("socket_path", &self.socket_path)
+            .finish()
+    }
 }
 
 impl Manager {
@@ -50,7 +65,27 @@ impl Manager {
         accounts_dir: Option<PathBuf>,
         socket_path: Option<PathBuf>,
     ) -> Arc<Self> {
+        Self::with_config(
+            idle_ms,
+            store,
+            accounts_dir,
+            socket_path,
+            Config::default(),
+            Arc::new(NoopNotifier),
+        )
+    }
+
+    pub fn with_config(
+        idle_ms: u64,
+        store: Store,
+        accounts_dir: Option<PathBuf>,
+        socket_path: Option<PathBuf>,
+        config: Config,
+        notifier: Arc<dyn Notifier>,
+    ) -> Arc<Self> {
         let (events_tx, _) = broadcast::channel(EVENTS_BROADCAST_CAPACITY);
+        let quotas = QuotaTracker::default();
+        quotas.set_warn_percent(config.quota_warn_percent);
         Arc::new(Self {
             idle_ms,
             sessions: RwLock::new(HashMap::new()),
@@ -58,7 +93,9 @@ impl Manager {
             store,
             accounts_dir,
             socket_path,
-            quotas: QuotaTracker::default(),
+            quotas,
+            config,
+            notifier,
         })
     }
 
@@ -188,6 +225,13 @@ impl Manager {
                 .map(|p| p.id);
         }
 
+        let mut agent_kind = params
+            .command
+            .first()
+            .and_then(|cmd| Path::new(cmd).file_name())
+            .and_then(|name| name.to_str())
+            .and_then(AgentKind::parse);
+
         params.account_id = params
             .account_id
             .take()
@@ -198,10 +242,15 @@ impl Manager {
                 .store
                 .get_account(account_id)
                 .map_err(store_error_to_rpc)?;
+            agent_kind = Some(account.agent);
             if let Some((key, val)) = accounts::env_for_account(&account) {
                 params.env.insert(key.to_string(), val);
             }
         }
+
+        let waiting_patterns = agent_kind
+            .and_then(|kind| self.config.compiled_waiting_patterns(kind).ok())
+            .unwrap_or_default();
 
         if let Some(sock) = self
             .socket_path
@@ -223,16 +272,22 @@ impl Manager {
 
         let title = unique_title(&sessions, &base_title);
         let id = unique_id(&sessions);
-        params.title = Some(title);
+        params.title = Some(title.clone());
 
-        let session =
-            Session::spawn(id.clone(), params, self.idle_ms).map_err(session_error_to_rpc)?;
+        let session = Session::spawn_with_waiting_patterns(
+            id.clone(),
+            params,
+            self.idle_ms,
+            waiting_patterns,
+        )
+        .map_err(session_error_to_rpc)?;
         sessions.insert(id.clone(), Arc::clone(&session));
         drop(sessions);
 
         let mut state_rx = session.subscribe_state();
         let mut info = session.info();
-        info.state = state_rx.borrow_and_update().clone();
+        let initial_state = state_rx.borrow_and_update().clone();
+        info.state = initial_state.clone();
         let initial_exited = matches!(info.state, SessionState::Exited { .. });
         let _ = self.events_tx.send(Notification::new(
             EVENT_SESSION_CREATED,
@@ -241,7 +296,11 @@ impl Manager {
 
         if !initial_exited {
             let events_tx = self.events_tx.clone();
+            let notifier = Arc::clone(&self.notifier);
+            let notifications_enabled = self.config.notifications;
+            let session_ref = Arc::clone(&session);
             tokio::spawn(async move {
+                let mut prev_state = initial_state;
                 while state_rx.changed().await.is_ok() {
                     let state = state_rx.borrow_and_update().clone();
                     let is_exited = matches!(state, SessionState::Exited { .. });
@@ -249,9 +308,28 @@ impl Manager {
                         EVENT_SESSION_STATE,
                         json!(SessionStateEvent {
                             id: id.clone(),
-                            state,
+                            state: state.clone(),
                         }),
                     ));
+                    if state == SessionState::Waiting
+                        && prev_state != SessionState::Waiting
+                        && notifications_enabled
+                    {
+                        let last_line = session_ref.last_visible_line();
+                        let notice = WaitingNotice::new(&id, &title, last_line.as_deref());
+                        let focus_tx = events_tx.clone();
+                        let focus_id = id.clone();
+                        notifier.notify_waiting(
+                            notice,
+                            Box::new(move || {
+                                let _ = focus_tx.send(Notification::new(
+                                    EVENT_SESSION_FOCUS_REQUEST,
+                                    json!(SessionFocusRequestEvent { id: focus_id }),
+                                ));
+                            }),
+                        );
+                    }
+                    prev_state = state;
                     if is_exited {
                         break;
                     }

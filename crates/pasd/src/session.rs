@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use bytes::Bytes;
 use pas_core::protocol::{AgentKind, CreateParams, SessionInfo, SessionState, WaitUntil};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use regex::Regex;
 use tokio::sync::{broadcast, watch};
 
 const SCROLLBACK_LINES: usize = 10_000;
@@ -67,6 +68,15 @@ impl fmt::Debug for Session {
 
 impl Session {
     pub fn spawn(id: String, p: CreateParams, idle_ms: u64) -> Result<Arc<Self>, SessionError> {
+        Self::spawn_with_waiting_patterns(id, p, idle_ms, Vec::new())
+    }
+
+    pub fn spawn_with_waiting_patterns(
+        id: String,
+        p: CreateParams,
+        idle_ms: u64,
+        waiting_patterns: Vec<Regex>,
+    ) -> Result<Arc<Self>, SessionError> {
         let Some(program) = p.command.first().cloned() else {
             return Err(SessionError::Spawn {
                 command: String::new(),
@@ -184,6 +194,7 @@ impl Session {
 
         let w_activity = Arc::clone(&last_activity_ms);
         let w_state = state_tx.clone();
+        let w_parser = Arc::clone(&parser);
         tokio::spawn(async move {
             loop {
                 let state = state_rx.borrow_and_update().clone();
@@ -202,9 +213,17 @@ impl Session {
                 let last = w_activity.load(Ordering::Acquire);
                 let elapsed = now.saturating_sub(last);
                 if elapsed >= idle_ms {
+                    let next_state = if !waiting_patterns.is_empty()
+                        && last_visible_line_from_parser(&w_parser)
+                            .is_some_and(|line| waiting_patterns.iter().any(|re| re.is_match(&line)))
+                    {
+                        SessionState::Waiting
+                    } else {
+                        SessionState::Idle
+                    };
                     w_state.send_if_modified(|s| {
                         if matches!(s, SessionState::Running) {
-                            *s = SessionState::Idle;
+                            *s = next_state.clone();
                             true
                         } else {
                             false
@@ -273,7 +292,7 @@ impl Session {
         let now = self.started_at.elapsed().as_millis() as u64;
         self.last_activity_ms.store(now, Ordering::Release);
         self.state_tx.send_if_modified(|s| {
-            if matches!(s, SessionState::Idle) {
+            if matches!(s, SessionState::Idle | SessionState::Waiting) {
                 *s = SessionState::Running;
                 true
             } else {
@@ -413,6 +432,10 @@ impl Session {
         self.state_tx.borrow().clone()
     }
 
+    pub fn last_visible_line(&self) -> Option<String> {
+        last_visible_line_from_parser(&self.parser)
+    }
+
     pub fn hooks_active(&self) -> bool {
         self.hooks_active.load(Ordering::Acquire)
     }
@@ -495,6 +518,18 @@ pub fn state_for_hook(agent: AgentKind, event: &str) -> Option<SessionState> {
         (AgentKind::Agy, "Stop" | "PostInvocation") => Some(SessionState::Idle),
         _ => None,
     }
+}
+
+fn last_visible_line_from_parser(parser: &Mutex<vt100::Parser>) -> Option<String> {
+    let parser = parser.lock().ok()?;
+    let (_, cols) = parser.screen().size();
+    let cols = cols.get();
+    parser
+        .screen()
+        .rows(0, cols)
+        .map(|row| row.trim_end().to_string())
+        .filter(|row| !row.is_empty())
+        .last()
 }
 
 fn matches_until(state: &SessionState, until: WaitUntil) -> bool {

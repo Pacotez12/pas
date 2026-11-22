@@ -21,6 +21,10 @@ fn main() {
 
         if let Some(text) = line.strip_prefix("echo ") {
             writeln!(out, "{text}").ok();
+        } else if let Some(question) = line.strip_prefix("ask ") {
+            write!(out, "{question}").ok();
+            out.flush().ok();
+            continue;
         } else if let Some(ms) = line.strip_prefix("sleep ") {
             if let Ok(ms) = ms.trim().parse::<u64>() {
                 thread::sleep(Duration::from_millis(ms));

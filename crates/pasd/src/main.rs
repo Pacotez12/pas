@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use clap::Parser;
 use pas_core::socket::socket_path;
+use pasd::config::Config;
 use pasd::manager::Manager;
+use pasd::notify::DesktopNotifier;
 use pasd::quota::CODEX_POLL_INTERVAL;
 use pasd::server;
 use pasd::store::Store;
@@ -80,12 +82,22 @@ async fn main() -> ExitCode {
         }
     };
 
+    let config = match Config::load_default() {
+        Ok(c) => c,
+        Err(err) => {
+            eprintln!("{err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     tracing::info!("pasd escuchando en {}", path.display());
-    let mgr = Manager::with_paths(
+    let mgr = Manager::with_config(
         args.idle_ms,
         store,
         Some(data_dir.join("accounts")),
         Some(path.clone()),
+        config,
+        Arc::new(DesktopNotifier::new()),
     );
     let quota_poller = mgr.spawn_quota_poller(CODEX_POLL_INTERVAL);
 
