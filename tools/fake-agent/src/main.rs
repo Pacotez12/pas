@@ -39,6 +39,20 @@ fn main() {
         } else if let Some(name) = line.strip_prefix("env ") {
             let val = std::env::var(name.trim()).unwrap_or_else(|_| "(vacío)".into());
             writeln!(out, "{val}").ok();
+        } else if line == "size" {
+            let output = std::process::Command::new("stty")
+                .arg("size")
+                .stdin(std::process::Stdio::inherit())
+                .output();
+            match output {
+                Ok(o) if o.status.success() => {
+                    let text = String::from_utf8_lossy(&o.stdout);
+                    writeln!(out, "{}", text.trim()).ok();
+                }
+                _ => {
+                    writeln!(out, "0 0").ok();
+                }
+            }
         }
 
         write!(out, "> ").ok();

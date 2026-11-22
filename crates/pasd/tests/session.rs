@@ -40,6 +40,7 @@ fn params_for(cmd: Vec<String>) -> CreateParams {
         env: BTreeMap::new(),
         cols: 120,
         rows: 40,
+        project_id: None,
     }
 }
 

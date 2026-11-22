@@ -7,11 +7,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use bytes::Bytes;
 use pas_core::protocol::{CreateParams, SessionInfo, SessionState, WaitUntil};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
 const SCROLLBACK_LINES: usize = 10_000;
+const OUTPUT_BROADCAST_CAPACITY: usize = 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -28,6 +30,9 @@ pub enum SessionError {
         secs: f64,
     },
 
+    #[error("El tamaño de la terminal tiene que ser mayor a cero. Pasá columnas y filas válidas.")]
+    InvalidSize,
+
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
@@ -38,11 +43,13 @@ pub struct Session {
     cwd: PathBuf,
     command: Vec<String>,
     created_at: u64,
+    project_id: Option<String>,
     parser: Arc<Mutex<vt100::Parser>>,
     writer: Mutex<Box<dyn Write + Send>>,
-    _master: Mutex<Box<dyn MasterPty + Send>>,
+    master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     state_tx: watch::Sender<SessionState>,
+    output_tx: broadcast::Sender<Bytes>,
     started_at: Instant,
     last_activity_ms: Arc<AtomicU64>,
 }
@@ -132,10 +139,12 @@ impl Session {
             SCROLLBACK_LINES,
         )));
         let (state_tx, mut state_rx) = watch::channel(SessionState::Running);
+        let (output_tx, _) = broadcast::channel(OUTPUT_BROADCAST_CAPACITY);
 
         let r_parser = Arc::clone(&parser);
         let r_activity = Arc::clone(&last_activity_ms);
         let r_state = state_tx.clone();
+        let r_output = output_tx.clone();
         thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
@@ -155,6 +164,7 @@ impl Session {
                                 false
                             }
                         });
+                        let _ = r_output.send(Bytes::copy_from_slice(&buf[..n]));
                     }
                 }
             }
@@ -217,17 +227,38 @@ impl Session {
             cwd: p.cwd,
             command: p.command,
             created_at,
+            project_id: p.project_id,
             parser,
             writer: Mutex::new(writer),
-            _master: Mutex::new(pair.master),
+            master: Mutex::new(pair.master),
             killer: Mutex::new(killer),
             state_tx,
+            output_tx,
             started_at,
             last_activity_ms,
         }))
     }
 
+    pub fn subscribe_output(&self) -> broadcast::Receiver<Bytes> {
+        self.output_tx.subscribe()
+    }
+
+    pub fn subscribe_state(&self) -> watch::Receiver<SessionState> {
+        self.state_tx.subscribe()
+    }
+
     pub fn send(&self, text: &str, enter: bool) -> Result<(), SessionError> {
+        if enter {
+            let mut buf = Vec::with_capacity(text.len() + 1);
+            buf.extend_from_slice(text.as_bytes());
+            buf.push(b'\r');
+            self.input(&buf)
+        } else {
+            self.input(text.as_bytes())
+        }
+    }
+
+    pub fn input(&self, data: &[u8]) -> Result<(), SessionError> {
         if matches!(self.state(), SessionState::Exited { .. }) {
             return Err(SessionError::Exited {
                 title: self.title.clone(),
@@ -247,10 +278,7 @@ impl Session {
 
         let mut writer = self.writer.lock().expect("writer lock poisoned");
         let write_res = (|| -> std::io::Result<()> {
-            writer.write_all(text.as_bytes())?;
-            if enter {
-                writer.write_all(b"\r")?;
-            }
+            writer.write_all(data)?;
             writer.flush()
         })();
 
@@ -264,6 +292,77 @@ impl Session {
         }
 
         Ok(())
+    }
+
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), SessionError> {
+        let Some(cols_nz) = NonZeroU16::new(cols) else {
+            return Err(SessionError::InvalidSize);
+        };
+        let Some(rows_nz) = NonZeroU16::new(rows) else {
+            return Err(SessionError::InvalidSize);
+        };
+
+        if matches!(self.state(), SessionState::Exited { .. }) {
+            return Err(SessionError::Exited {
+                title: self.title.clone(),
+            });
+        }
+
+        let master = self.master.lock().expect("master lock poisoned");
+        if let Err(e) = master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        }) {
+            if matches!(self.state(), SessionState::Exited { .. }) {
+                return Err(SessionError::Exited {
+                    title: self.title.clone(),
+                });
+            }
+            return Err(SessionError::Io(std::io::Error::other(e.to_string())));
+        }
+        drop(master);
+
+        let mut parser = self.parser.lock().expect("parser lock poisoned");
+        parser.set_size(rows_nz, cols_nz);
+        Ok(())
+    }
+
+    pub fn snapshot(&self) -> Vec<u8> {
+        let mut parser = self.parser.lock().expect("parser lock poisoned");
+        let (rows, cols) = parser.screen().size();
+        let rows_usize = usize::from(rows.get());
+        let cols_u16 = cols.get();
+
+        let mut out = String::from("\x1b[3J\x1b[2J\x1b[H");
+
+        if !parser.screen().alternate_screen() {
+            parser.screen_mut().set_scrollback(usize::MAX);
+            let total_sb = parser.screen().scrollback();
+
+            if total_sb > 0 {
+                let mut offset = total_sb;
+                while offset > 0 {
+                    parser.screen_mut().set_scrollback(offset);
+                    let take = offset.min(rows_usize);
+                    for row in parser.screen().rows_formatted(0, cols_u16).take(take) {
+                        out.push_str(&row);
+                        out.push_str("\x1b[0m\r\n");
+                    }
+                    offset -= take;
+                }
+                parser.screen_mut().set_scrollback(0);
+                for _ in 0..rows.get().saturating_sub(1) {
+                    out.push_str("\r\n");
+                }
+            } else {
+                parser.screen_mut().set_scrollback(0);
+            }
+        }
+
+        out.push_str(&parser.screen().contents_formatted());
+        out.into_bytes()
     }
 
     pub fn read(&self, lines: Option<usize>) -> String {
@@ -317,6 +416,7 @@ impl Session {
             command: self.command.clone(),
             state: self.state(),
             created_at: self.created_at,
+            project_id: self.project_id.clone(),
         }
     }
 

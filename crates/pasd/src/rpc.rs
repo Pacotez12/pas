@@ -1,10 +1,13 @@
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use pas_core::protocol::{
-    CreateParams, CreateResult, ERR_INVALID_PARAMS, ERR_METHOD_NOT_FOUND, IdParams,
-    METHOD_DAEMON_PING, METHOD_SESSION_CREATE, METHOD_SESSION_KILL, METHOD_SESSION_LIST,
-    METHOD_SESSION_READ, METHOD_SESSION_SEND, METHOD_SESSION_WAIT, PingResult, ReadParams,
-    ReadResult, Request, Response, RpcError, SendParams, WaitParams,
+    CreateParams, CreateResult, ERR_INVALID_PARAMS, ERR_METHOD_NOT_FOUND, IdParams, InputParams,
+    METHOD_DAEMON_PING, METHOD_SESSION_CREATE, METHOD_SESSION_INPUT, METHOD_SESSION_KILL,
+    METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_RESIZE, METHOD_SESSION_SEND,
+    METHOD_SESSION_SNAPSHOT, METHOD_SESSION_WAIT, PingResult, ReadParams, ReadResult, Request,
+    ResizeParams, Response, RpcError, SendParams, SnapshotResult, WaitParams,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -40,6 +43,33 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
                 .map_err(session_error_to_rpc)?;
             Ok(json!({}))
         }
+        METHOD_SESSION_INPUT => {
+            let params: InputParams = parse_params(req.params)?;
+            let bytes = STANDARD.decode(&params.data_b64).map_err(|_| RpcError {
+                code: ERR_INVALID_PARAMS,
+                message: "El campo `data_b64` no es base64 válido. Codificá los bytes en base64 estándar."
+                    .into(),
+            })?;
+            let session = mgr.get(&params.id)?;
+            session.input(&bytes).map_err(session_error_to_rpc)?;
+            Ok(json!({}))
+        }
+        METHOD_SESSION_RESIZE => {
+            let params: ResizeParams = parse_params(req.params)?;
+            let session = mgr.get(&params.id)?;
+            session
+                .resize(params.cols, params.rows)
+                .map_err(session_error_to_rpc)?;
+            Ok(json!({}))
+        }
+        METHOD_SESSION_SNAPSHOT => {
+            let params: IdParams = parse_params(req.params)?;
+            let session = mgr.get(&params.id)?;
+            let bytes = session.snapshot();
+            ok_json(SnapshotResult {
+                data_b64: STANDARD.encode(bytes),
+            })
+        }
         METHOD_SESSION_READ => {
             let params: ReadParams = parse_params(req.params)?;
             let session = mgr.get(&params.id)?;
@@ -58,8 +88,7 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
         }
         METHOD_SESSION_KILL => {
             let params: IdParams = parse_params(req.params)?;
-            let session = mgr.get(&params.id)?;
-            session.kill();
+            mgr.kill(&params.id)?;
             Ok(json!({}))
         }
         other => Err(RpcError {

@@ -2,24 +2,37 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use pas_core::protocol::{
-    CreateParams, ERR_SESSION_EXITED, ERR_SESSION_NOT_FOUND, ERR_SPAWN_FAILED, ERR_WAIT_TIMEOUT,
-    RpcError, SessionInfo,
+    CreateParams, ERR_INVALID_PARAMS, ERR_SESSION_EXITED, ERR_SESSION_NOT_FOUND, ERR_SPAWN_FAILED,
+    ERR_WAIT_TIMEOUT, EVENT_SESSION_CREATED, EVENT_SESSION_REMOVED, EVENT_SESSION_STATE,
+    Notification, RpcError, SessionCreatedEvent, SessionInfo, SessionRemovedEvent, SessionState,
+    SessionStateEvent,
 };
+use serde_json::json;
+use tokio::sync::broadcast;
 
 use crate::session::{Session, SessionError};
+
+const EVENTS_BROADCAST_CAPACITY: usize = 256;
 
 #[derive(Debug)]
 pub struct Manager {
     idle_ms: u64,
     sessions: RwLock<HashMap<String, Arc<Session>>>,
+    events_tx: broadcast::Sender<Notification>,
 }
 
 impl Manager {
     pub fn new(idle_ms: u64) -> Arc<Self> {
+        let (events_tx, _) = broadcast::channel(EVENTS_BROADCAST_CAPACITY);
         Arc::new(Self {
             idle_ms,
             sessions: RwLock::new(HashMap::new()),
+            events_tx,
         })
+    }
+
+    pub fn subscribe_events(&self) -> broadcast::Receiver<Notification> {
+        self.events_tx.subscribe()
     }
 
     pub fn create(&self, mut params: CreateParams) -> Result<Arc<Session>, RpcError> {
@@ -37,8 +50,50 @@ impl Manager {
 
         let session =
             Session::spawn(id.clone(), params, self.idle_ms).map_err(session_error_to_rpc)?;
-        sessions.insert(id, Arc::clone(&session));
+        sessions.insert(id.clone(), Arc::clone(&session));
+        drop(sessions);
+
+        let mut state_rx = session.subscribe_state();
+        let mut info = session.info();
+        info.state = state_rx.borrow_and_update().clone();
+        let initial_exited = matches!(info.state, SessionState::Exited { .. });
+        let _ = self.events_tx.send(Notification::new(
+            EVENT_SESSION_CREATED,
+            json!(SessionCreatedEvent { info }),
+        ));
+
+        if !initial_exited {
+            let events_tx = self.events_tx.clone();
+            tokio::spawn(async move {
+                while state_rx.changed().await.is_ok() {
+                    let state = state_rx.borrow_and_update().clone();
+                    let is_exited = matches!(state, SessionState::Exited { .. });
+                    let _ = events_tx.send(Notification::new(
+                        EVENT_SESSION_STATE,
+                        json!(SessionStateEvent {
+                            id: id.clone(),
+                            state,
+                        }),
+                    ));
+                    if is_exited {
+                        break;
+                    }
+                }
+            });
+        }
+
         Ok(session)
+    }
+
+    pub fn kill(&self, id_or_title: &str) -> Result<(), RpcError> {
+        let session = self.get(id_or_title)?;
+        let id = session.info().id;
+        session.kill();
+        let _ = self.events_tx.send(Notification::new(
+            EVENT_SESSION_REMOVED,
+            json!(SessionRemovedEvent { id }),
+        ));
+        Ok(())
     }
 
     pub fn get(&self, id_or_title: &str) -> Result<Arc<Session>, RpcError> {
@@ -77,6 +132,7 @@ pub(crate) fn session_error_to_rpc(err: SessionError) -> RpcError {
         SessionError::Spawn { .. } => ERR_SPAWN_FAILED,
         SessionError::Timeout { .. } => ERR_WAIT_TIMEOUT,
         SessionError::Exited { .. } => ERR_SESSION_EXITED,
+        SessionError::InvalidSize => ERR_INVALID_PARAMS,
         SessionError::Io(_) => -32603,
     };
     RpcError {
