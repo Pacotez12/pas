@@ -1,18 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type ILink, type ILinkProvider } from "@xterm/xterm";
 import { Columns2, GitBranch, Rows2, X } from "lucide-react";
 import {
   api,
   decodeBase64Bytes,
   encodeUtf8Base64,
+  type OpenExistsResult,
+  type OpenTarget,
   type SessionInfo,
   type WorktreeInfo,
   type WorktreeStatus,
 } from "../api/pas";
 import { es } from "../i18n/es";
 import type { SplitDir } from "../state/layout";
+import { findPathMatchesInLine } from "../state/pathDetect";
+import { OpenFolderMenu } from "./OpenFolderMenu";
 import { statusDotClass } from "./Tabs";
 import {
   WorktreeExitedStrip,
@@ -29,6 +34,9 @@ interface TerminalPaneProps {
   onFocus: () => void;
   onSplit: (dir: SplitDir) => void;
   onClose: () => void;
+  onOpenPath: (path: string, target: OpenTarget, line?: number | null) => void;
+  onOpenUrl: (url: string) => void;
+  onCopyPath: (path: string) => void;
   onRemoveExited: () => Promise<void>;
   onReopen: () => Promise<void>;
   onRemoveWorktree: (worktree: WorktreeInfo) => Promise<void>;
@@ -39,12 +47,13 @@ function isPasShortcut(ev: KeyboardEvent): boolean {
   if (ev.type !== "keydown") return false;
   if (ev.ctrlKey && ev.shiftKey && !ev.altKey && !ev.metaKey) {
     const key = ev.key.toLowerCase();
-    if (key === "t" || key === "d" || key === "e" || key === "w") {
+    if (key === "t" || key === "d" || key === "e" || key === "w" || key === "o") {
       return true;
     }
   }
   if (ev.ctrlKey && !ev.shiftKey && !ev.altKey && !ev.metaKey) {
-    if (ev.key === "PageUp" || ev.key === "PageDown") {
+    const key = ev.key.toLowerCase();
+    if (key === "k" || ev.key === "PageUp" || ev.key === "PageDown") {
       return true;
     }
   }
@@ -76,6 +85,9 @@ export function TerminalPane({
   onFocus,
   onSplit,
   onClose,
+  onOpenPath,
+  onOpenUrl,
+  onCopyPath,
   onRemoveExited,
   onReopen,
   onRemoveWorktree,
@@ -84,6 +96,16 @@ export function TerminalPane({
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const sessionCwdRef = useRef<string>(session?.worktree?.path ?? session?.cwd ?? "");
+  const onOpenPathRef = useRef(onOpenPath);
+  const onOpenUrlRef = useRef(onOpenUrl);
+  const ctrlHeldRef = useRef(false);
+  const existsCacheRef = useRef<Map<string, Promise<OpenExistsResult>>>(new Map());
+  const [linkTip, setLinkTip] = useState<{
+    text: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const [dims, setDims] = useState<{ cols: number; rows: number }>({
     cols: 120,
     rows: 40,
@@ -91,6 +113,11 @@ export function TerminalPane({
   const [busyAction, setBusyAction] = useState<
     "closing" | WorktreeStripBusy
   >(null);
+
+  const sessionFolder = session?.worktree?.path ?? session?.cwd ?? "";
+  sessionCwdRef.current = sessionFolder;
+  onOpenPathRef.current = onOpenPath;
+  onOpenUrlRef.current = onOpenUrl;
 
   const isExited = session?.state.state === "exited";
   const exitedCode = session?.state.state === "exited" ? session.state.code : null;
@@ -136,6 +163,155 @@ export function TerminalPane({
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
+
+    const onKeyDownCtrl = (e: KeyboardEvent) => {
+      if (e.key === "Control") ctrlHeldRef.current = true;
+    };
+    const onKeyUpCtrl = (e: KeyboardEvent) => {
+      if (e.key === "Control") {
+        ctrlHeldRef.current = false;
+        setLinkTip(null);
+      }
+    };
+    const onWindowBlur = () => {
+      ctrlHeldRef.current = false;
+      setLinkTip(null);
+    };
+    const onHostMouseMove = (e: MouseEvent) => {
+      ctrlHeldRef.current = e.ctrlKey;
+      if (!e.ctrlKey) {
+        setLinkTip((prev) => (prev ? null : prev));
+      }
+    };
+    window.addEventListener("keydown", onKeyDownCtrl);
+    window.addEventListener("keyup", onKeyUpCtrl);
+    window.addEventListener("blur", onWindowBlur);
+    host.addEventListener("mousemove", onHostMouseMove, true);
+
+    const dynamicCtrlDecorations = () => ({
+      get pointerCursor() {
+        return ctrlHeldRef.current;
+      },
+      get underline() {
+        return ctrlHeldRef.current;
+      },
+    });
+
+    // Load WebLinksAddon wrapping its link provider so URLs underline only with Ctrl
+    // and open via tauri-plugin-opener on Ctrl+click.
+    const origRegisterLinkProvider = term.registerLinkProvider.bind(term);
+    term.registerLinkProvider = (provider: ILinkProvider) =>
+      origRegisterLinkProvider({
+        provideLinks(bufferLineNumber, callback) {
+          provider.provideLinks(bufferLineNumber, (links) => {
+            if (!links || links.length === 0) {
+              callback(links);
+              return;
+            }
+            callback(
+              links.map((link) => ({
+                ...link,
+                decorations: dynamicCtrlDecorations(),
+                hover(event, text) {
+                  ctrlHeldRef.current = event.ctrlKey || ctrlHeldRef.current;
+                  if (ctrlHeldRef.current) {
+                    setLinkTip({
+                      text: es.pane.terminalUrlHint,
+                      x: event.clientX,
+                      y: Math.max(8, event.clientY - 30),
+                    });
+                  }
+                  link.hover?.(event, text);
+                },
+                leave(event, text) {
+                  setLinkTip(null);
+                  link.leave?.(event, text);
+                },
+              })),
+            );
+          });
+        },
+      });
+    const webLinksAddon = new WebLinksAddon((event, uri) => {
+      if (!event.ctrlKey) return;
+      onOpenUrlRef.current(uri);
+    });
+    term.loadAddon(webLinksAddon);
+    term.registerLinkProvider = origRegisterLinkProvider;
+
+    const checkExistsCached = (cwd: string, candidatePath: string) => {
+      const key = `${cwd}\0${candidatePath}`;
+      const existing = existsCacheRef.current.get(key);
+      if (existing) return existing;
+      const promise = api
+        .openExists(cwd, candidatePath)
+        .catch(() => ({ exists: false, resolved: null, is_dir: false }));
+      if (existsCacheRef.current.size > 500) {
+        existsCacheRef.current.clear();
+      }
+      existsCacheRef.current.set(key, promise);
+      return promise;
+    };
+
+    const filePathLinkDisposable = term.registerLinkProvider({
+      provideLinks(bufferLineNumber, callback) {
+        const lineObj = term.buffer.active.getLine(bufferLineNumber - 1);
+        if (!lineObj) {
+          callback(undefined);
+          return;
+        }
+        const lineText = lineObj.translateToString(false);
+        const matches = findPathMatchesInLine(lineText);
+        if (matches.length === 0) {
+          callback(undefined);
+          return;
+        }
+        const cwd = sessionCwdRef.current;
+        if (!cwd) {
+          callback(undefined);
+          return;
+        }
+        void Promise.all(
+          matches.map(async (m) => {
+            const res = await checkExistsCached(cwd, m.path);
+            return { match: m, res };
+          }),
+        ).then((checked) => {
+          const links: ILink[] = [];
+          for (const { match, res } of checked) {
+            if (!res.exists || !res.resolved) continue;
+            const resolvedPath = res.resolved;
+            links.push({
+              range: {
+                start: { x: match.start + 1, y: bufferLineNumber },
+                end: { x: match.end, y: bufferLineNumber },
+              },
+              text: match.raw,
+              decorations: dynamicCtrlDecorations(),
+              hover(event) {
+                ctrlHeldRef.current = event.ctrlKey || ctrlHeldRef.current;
+                if (ctrlHeldRef.current) {
+                  setLinkTip({
+                    text: es.pane.terminalLinkHint,
+                    x: event.clientX,
+                    y: Math.max(8, event.clientY - 30),
+                  });
+                }
+              },
+              leave() {
+                setLinkTip(null);
+              },
+              activate(event) {
+                if (!event.ctrlKey) return;
+                onOpenPathRef.current(resolvedPath, "editor", match.line ?? null);
+              },
+            });
+          }
+          callback(links.length > 0 ? links : undefined);
+        });
+      },
+    });
+
     term.open(host);
 
     try {
@@ -257,6 +433,11 @@ export function TerminalPane({
       }
       observer.disconnect();
       dataDisposable.dispose();
+      filePathLinkDisposable.dispose();
+      window.removeEventListener("keydown", onKeyDownCtrl);
+      window.removeEventListener("keyup", onKeyUpCtrl);
+      window.removeEventListener("blur", onWindowBlur);
+      host.removeEventListener("mousemove", onHostMouseMove, true);
       unlistenOutput?.();
       unlistenSnapshot?.();
       void api.unsubscribe(sessionId).catch(() => {});
@@ -317,6 +498,13 @@ export function TerminalPane({
           {dims.cols}×{dims.rows}
         </span>
         <div className="pas-pane-actions">
+          {sessionFolder && (
+            <OpenFolderMenu
+              folderPath={sessionFolder}
+              onOpenPath={(path, target) => onOpenPath(path, target)}
+              onCopyPath={onCopyPath}
+            />
+          )}
           <button
             type="button"
             className="pas-pane-btn"
@@ -359,6 +547,15 @@ export function TerminalPane({
         ref={hostRef}
         className={`pas-terminal-host${isExited ? " is-exited" : ""}`}
       />
+      {linkTip && (
+        <div
+          className="pas-term-tip"
+          style={{ left: linkTip.x + 8, top: linkTip.y }}
+          aria-hidden="true"
+        >
+          {linkTip.text}
+        </div>
+      )}
       {isExited && activeWorktree ? (
         <WorktreeExitedStrip
           worktree={activeWorktree}

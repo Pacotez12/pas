@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { openUrl as openExternalUrl } from "@tauri-apps/plugin-opener";
 import { AlertCircle, Plus, Search, Settings, X } from "lucide-react";
 import pasMarkUrl from "./assets/pas-mark-sin-broche.svg";
 import {
@@ -7,6 +8,7 @@ import {
   type AgentKind,
   type ConnectionStatus,
   type GroupInfo,
+  type OpenTarget,
   type ProjectInfo,
   type Quota,
   type SessionInfo,
@@ -15,6 +17,7 @@ import {
   type WorktreeStatus,
 } from "./api/pas";
 import { AccountsView } from "./components/AccountsView";
+import { CommandPalette } from "./components/CommandPalette";
 import {
   NewSessionDialog,
   type NewSessionFormResult,
@@ -81,6 +84,7 @@ export function App() {
   }>({ enabled: false, dir: "row", targetSessionId: null });
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [addProjectFromNewSession, setAddProjectFromNewSession] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [pendingNewSessionProjectId, setPendingNewSessionProjectId] = useState<string | null>(
     null,
   );
@@ -337,6 +341,48 @@ export function App() {
     setNewSessionDialog((prev) => closeDialog(prev));
   }, []);
 
+  const handleOpenPath = useCallback(
+    async (path: string, target: OpenTarget, line?: number | null) => {
+      try {
+        await api.openPath(path, target, line ?? null);
+      } catch (err) {
+        setErrorBanner(String(err));
+      }
+    },
+    [],
+  );
+
+  const handleOpenUrl = useCallback(async (url: string) => {
+    try {
+      await openExternalUrl(url);
+    } catch (err) {
+      setErrorBanner(
+        es.errors.actionFailed(es.errors.actions.openUrl, String(err)),
+      );
+    }
+  }, []);
+
+  const handleCopyPath = useCallback(async (path: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(path);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = path;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+    } catch (err) {
+      setErrorBanner(
+        es.errors.actionFailed(es.errors.actions.copyPath, String(err)),
+      );
+    }
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
@@ -353,9 +399,17 @@ export function App() {
         } else if (key === "w" && activeSessionId) {
           e.preventDefault();
           setLayout((prev) => closePane(prev, activeSessionId));
+        } else if (key === "o" && activeSession) {
+          e.preventDefault();
+          const folder = activeSession.worktree?.path ?? activeSession.cwd;
+          void handleOpenPath(folder, "editor");
         }
       } else if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
-        if (e.key === "PageUp") {
+        const key = e.key.toLowerCase();
+        if (key === "k") {
+          e.preventDefault();
+          setPaletteOpen((prev) => !prev);
+        } else if (e.key === "PageUp") {
           e.preventDefault();
           setLayout((prev) => cycleTab(prev, -1));
         } else if (e.key === "PageDown") {
@@ -366,7 +420,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeSessionId, openNewSessionModal]);
+  }, [activeSessionId, activeSession, openNewSessionModal, handleOpenPath]);
 
   async function handleCreateSession(form: NewSessionFormResult) {
     const created = await api.createSession({
@@ -423,12 +477,21 @@ export function App() {
     setProjects(nextProjects);
   }
 
-  async function handleAddProject(path: string, name?: string) {
-    const created = await api.addProject(path, name);
-    await refreshProjectsAndGroups();
-    if (addProjectFromNewSession) {
-      setPendingNewSessionProjectId(created.id);
+  async function handleAddProjects(paths: string[]) {
+    let firstCreated: ProjectInfo | null = null;
+    for (const p of paths) {
+      const created = await api.addProject(p);
+      if (!firstCreated) firstCreated = created;
     }
+    await refreshProjectsAndGroups();
+    if (addProjectFromNewSession && firstCreated) {
+      setPendingNewSessionProjectId(firstCreated.id);
+    }
+  }
+
+  function handleNewSessionForProject(project: ProjectInfo) {
+    setPendingNewSessionProjectId(project.id);
+    openNewSessionModal();
   }
 
   async function handleRemoveExitedSession(sessionId: string) {
@@ -725,9 +788,10 @@ export function App() {
         <span className="pas-spacer" />
         <button
           type="button"
-          className="pas-icon-btn"
+          className={`pas-icon-btn${paletteOpen ? " is-active" : ""}`}
           title={es.app.searchTooltip}
           aria-label={es.app.searchTooltip}
+          onClick={() => setPaletteOpen((prev) => !prev)}
         >
           <Search size={15} strokeWidth={2} />
         </button>
@@ -781,14 +845,21 @@ export function App() {
             sessions={sessions}
             accountsById={accountsById}
             activeSessionId={activeSessionId}
-          onNewSession={() => openNewSessionModal()}
-          onSelectSession={(sessionId) =>
-            setLayout((prev) => openSessionTab(prev, sessionId))
-          }
-          onAddProject={() => {
-            setAddProjectFromNewSession(false);
-            setAddProjectOpen(true);
-          }}
+            onNewSession={() => openNewSessionModal()}
+            onNewSessionForProject={handleNewSessionForProject}
+            onSelectSession={(sessionId) =>
+              setLayout((prev) => openSessionTab(prev, sessionId))
+            }
+            onAddProject={() => {
+              setAddProjectFromNewSession(false);
+              setAddProjectOpen(true);
+            }}
+            onOpenProjectPath={(project, target) => {
+              void handleOpenPath(project.path, target);
+            }}
+            onCopyPath={(path) => {
+              void handleCopyPath(path);
+            }}
           onRenameProject={(project) =>
             setTextPrompt({ kind: "rename-project", project })
           }
@@ -870,6 +941,15 @@ export function App() {
                       setLayout((prev) => closePane(prev, sessionId))
                     }
                     onOpenInTerminal={handleOpenInTerminal}
+                    onOpenPath={(path, target, line) => {
+                      void handleOpenPath(path, target, line);
+                    }}
+                    onOpenUrl={(url) => {
+                      void handleOpenUrl(url);
+                    }}
+                    onCopyPath={(path) => {
+                      void handleCopyPath(path);
+                    }}
                     onRemoveExitedSession={handleRemoveExitedSession}
                     onReopenSession={handleReopenSession}
                     onRemoveWorktree={handleRequestRemoveWorktree}
@@ -1062,7 +1142,44 @@ export function App() {
             setExtraFocusTick((n) => n + 1);
           }
         }}
-        onSubmit={handleAddProject}
+        onSubmit={handleAddProjects}
+      />
+
+      <CommandPalette
+        open={paletteOpen}
+        sessions={sessions}
+        projects={projects}
+        hasActiveSession={activeSession !== null}
+        onClose={() => {
+          setPaletteOpen(false);
+          setExtraFocusTick((n) => n + 1);
+        }}
+        onSelectSession={(session) => {
+          setAccountsViewOpen(false);
+          setLayout((prev) => openSessionTab(prev, session.id));
+          setExtraFocusTick((n) => n + 1);
+        }}
+        onNewSessionForProject={(project) => {
+          setAccountsViewOpen(false);
+          handleNewSessionForProject(project);
+        }}
+        onOpenPathInEditor={(path) => {
+          void handleOpenPath(path, "editor");
+        }}
+        onRunAction={(actionId) => {
+          if (actionId === "new-session") {
+            openNewSessionModal();
+          } else if (actionId === "add-project") {
+            setAddProjectFromNewSession(false);
+            setAddProjectOpen(true);
+          } else if (actionId === "accounts") {
+            setAccountsViewOpen(true);
+            void refreshAccountsAndQuotas().catch(() => {});
+          } else if (actionId === "open-current-editor" && activeSession) {
+            const folder = activeSession.worktree?.path ?? activeSession.cwd;
+            void handleOpenPath(folder, "editor");
+          }
+        }}
       />
 
       <TextPromptDialog

@@ -277,7 +277,7 @@ describe("pas-gui e2e", () => {
       await browser.$(".pas-accounts-view").waitForDisplayed({ timeout: 10_000 });
 
       // Agregar cuenta apuntando al tempdir.
-      await browser.$(".pas-accounts-footer button").click();
+      await browser.$(".pas-accounts-footer button:first-child").click();
       const nameInput = await browser.$("#acc-name");
       await nameInput.waitForDisplayed({ timeout: 10_000 });
       await nameInput.setValue("Personal");
@@ -887,6 +887,272 @@ describe("pas-gui e2e", () => {
           timeout: 15_000,
           interval: 100,
           timeoutMsg: "El worktree no se borró tras confirmar con la casilla.",
+        },
+      );
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  it("agrega proyecto sugerido, abre en editor falso desde menú y terminal (Ctrl+click), y salta con Ctrl+K", async () => {
+    const ctx = new E2EContext();
+    try {
+      const discoverRoot = path.join(ctx.tmpDir, "mis-proyectos");
+      const suggestedRepo = path.join(discoverRoot, "pockt-demo");
+      fs.mkdirSync(path.join(suggestedRepo, "lib"), { recursive: true });
+      execFileSync("git", ["init", "-q"], { cwd: suggestedRepo });
+      const dartFile = path.join(suggestedRepo, "lib", "export.dart");
+      fs.writeFileSync(dartFile, "void exportCsv() {}\n", "utf8");
+
+      const { editorPath, logPath } = ctx.createFakeEditor("code");
+      ctx.createFakeAgentAlias("claude");
+      ctx.writeConfig(
+        [
+          `editor = ${JSON.stringify(editorPath)}`,
+          `discover_dirs = [${JSON.stringify(discoverRoot)}]`,
+        ].join("\n") + "\n",
+      );
+
+      await ctx.startPasd();
+      const browser = await ctx.openApp();
+
+      // 1. Agregar proyecto sugerido sin escribir ruta.
+      await browser.$(".pas-add-project").click();
+      const suggestedRow = await browser.$(`[data-discovered-path="${suggestedRepo}"]`);
+      await suggestedRow.waitForDisplayed({ timeout: 10_000 });
+      await suggestedRow.click();
+
+      const submitBtn = await browser.$('.pas-dialog-card button[type="submit"]');
+      expect((await submitBtn.getText()).trim()).toBe("Agregar 1 proyecto");
+      await submitBtn.click();
+      await browser.waitUntil(
+        async () =>
+          browser.execute(() => document.querySelector(".pas-dialog-backdrop") === null),
+        { timeout: 10_000, interval: 50 },
+      );
+
+      await browser.waitUntil(
+        async () => (await readTextContent(browser, ".pas-sidebar")).includes("pockt-demo"),
+        { timeout: 10_000, timeoutMsg: "El proyecto sugerido no apareció en la sidebar." },
+      );
+
+      // 2. Abrir en el editor desde el menú contextual del proyecto.
+      const famBtn = await browser.$(".pas-sidebar .pas-fam");
+      await famBtn.click({ button: "right" });
+      await browser.$(".pas-project-menu").waitForDisplayed({ timeout: 10_000 });
+      const menuItems = await browser.$$(".pas-project-menu .pas-menu-item");
+      let clickedOpenEditor = false;
+      for (const item of menuItems) {
+        if ((await item.getText()).includes("Abrir en el editor")) {
+          await item.click();
+          clickedOpenEditor = true;
+          break;
+        }
+      }
+      expect(clickedOpenEditor).toBe(true);
+
+      const canonRepo = fs.realpathSync(suggestedRepo);
+      await browser.waitUntil(
+        async () =>
+          fs.existsSync(logPath) &&
+          fs.readFileSync(logPath, "utf8").includes(canonRepo),
+        {
+          timeout: 10_000,
+          interval: 100,
+          timeoutMsg: "El lanzador falso no registró la apertura del proyecto en el editor.",
+        },
+      );
+
+      // 3. Abrir sesión de terminal, imprimir lib/export.dart:42 y hacer Ctrl+click.
+      await browser.$(".pas-new-btn").click();
+      await browser.$(".pas-dialog-card").waitForDisplayed({ timeout: 10_000 });
+      await browser.$('.pas-dialog-card button[type="submit"]').click();
+      await browser.waitUntil(
+        async () =>
+          browser.execute(() => document.querySelector(".pas-dialog-backdrop") === null),
+        { timeout: 10_000, interval: 50 },
+      );
+      await waitForPaneText(browser, 0, "fake-agent listo");
+      const firstSessionId = await browser.$(".pas-pane").getAttribute("data-session-id");
+      expect(firstSessionId).toBeTruthy();
+
+      // Enviar la línea vía pas CLI (evita mapeo de teclado XKB en WebKitWebDriver para '/' y ':').
+      execFileSync(PAS_CLI_BIN, ["send", firstSessionId!, "echo lib/export.dart:42"], {
+        env: { ...process.env, PAS_SOCKET: ctx.socketPath },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      await waitForPaneText(browser, 0, "\nlib/export.dart:42");
+
+      // Ubicar las coordenadas de lib/export.dart:42 en la grilla de xterm y simular Ctrl+hover.
+      const coords = await browser.execute(() => {
+        const pane = document.querySelector(".pas-pane");
+        const screen = pane?.querySelector(".xterm-screen") as HTMLElement | null;
+        const dimsText = pane?.querySelector(".pas-pane-dims")?.textContent ?? "";
+        const host = pane?.querySelector(".pas-terminal-host") as
+          | (HTMLDivElement & { __pasReadBuffer?: () => string })
+          | null;
+        if (!screen || !host?.__pasReadBuffer) return null;
+        const [colsStr, rowsStr] = dimsText.split("×");
+        const cols = Number.parseInt(colsStr, 10);
+        const rows = Number.parseInt(rowsStr, 10);
+        if (!cols || !rows) return null;
+        const lines = host.__pasReadBuffer().split("\n");
+        let targetRow = -1;
+        let targetCol = -1;
+        for (let r = lines.length - 1; r >= 0; r -= 1) {
+          const idx = lines[r].indexOf("lib/export.dart:42");
+          if (idx !== -1 && !lines[r].includes("echo ")) {
+            targetRow = r;
+            targetCol = idx;
+            break;
+          }
+        }
+        if (targetRow === -1) return null;
+        const rect = screen.getBoundingClientRect();
+        const cellW = rect.width / cols;
+        const cellH = rect.height / rows;
+        return {
+          x: rect.left + (targetCol + 4) * cellW,
+          y: rect.top + (targetRow + 0.5) * cellH,
+        };
+      });
+      expect(coords).not.toBeNull();
+
+      await browser.execute((pt: { x: number; y: number }) => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Control", ctrlKey: true, bubbles: true }));
+        const target =
+          (document.elementFromPoint(pt.x, pt.y) as HTMLElement | null) ??
+          document.querySelector(".pas-pane .xterm-screen");
+        target?.dispatchEvent(
+          new MouseEvent("mousemove", {
+            clientX: pt.x,
+            clientY: pt.y,
+            ctrlKey: true,
+            bubbles: true,
+          }),
+        );
+      }, coords!);
+
+      await browser.waitUntil(
+        async () => browser.$(".pas-term-tip").isExisting(),
+        {
+          timeout: 10_000,
+          interval: 100,
+          timeoutMsg: "No apareció el tooltip de Ctrl+click al pasar sobre la ruta de la terminal.",
+        },
+      );
+
+      await browser.execute((pt: { x: number; y: number }) => {
+        const target =
+          (document.elementFromPoint(pt.x, pt.y) as HTMLElement | null) ??
+          document.querySelector(".pas-pane .xterm-screen");
+        target?.dispatchEvent(
+          new MouseEvent("mousedown", {
+            clientX: pt.x,
+            clientY: pt.y,
+            ctrlKey: true,
+            button: 0,
+            bubbles: true,
+          }),
+        );
+        target?.dispatchEvent(
+          new MouseEvent("mouseup", {
+            clientX: pt.x,
+            clientY: pt.y,
+            ctrlKey: true,
+            button: 0,
+            bubbles: true,
+          }),
+        );
+        target?.dispatchEvent(
+          new MouseEvent("click", {
+            clientX: pt.x,
+            clientY: pt.y,
+            ctrlKey: true,
+            button: 0,
+            bubbles: true,
+          }),
+        );
+        window.dispatchEvent(new KeyboardEvent("keyup", { key: "Control", ctrlKey: false, bubbles: true }));
+      }, coords!);
+
+      const canonFile = fs.realpathSync(dartFile);
+      await browser.waitUntil(
+        async () =>
+          fs.existsSync(logPath) &&
+          fs.readFileSync(logPath, "utf8").includes(`-g ${canonFile}:42`),
+        {
+          timeout: 10_000,
+          interval: 100,
+          timeoutMsg: `El lanzador falso no recibió -g ${canonFile}:42 tras Ctrl+click en la terminal.`,
+        },
+      );
+
+      // 4. Abrir una segunda sesión (con título distinto) y volver a la primera usando Ctrl+K.
+      await browser.$(".pas-new-btn").click();
+      await browser.$(".pas-dialog-card").waitForDisplayed({ timeout: 10_000 });
+      const titleInput = await browser.$("#ns-title");
+      await titleInput.setValue("segunda-sesion");
+      await browser.$('.pas-dialog-card button[type="submit"]').click();
+      await browser.waitUntil(
+        async () =>
+          browser.execute(() => document.querySelector(".pas-dialog-backdrop") === null),
+        { timeout: 10_000, interval: 50 },
+      );
+
+      await browser.waitUntil(
+        async () => (await browser.$$(".pas-tab")).length === 2,
+        { timeout: 10_000, timeoutMsg: "No se abrió la segunda pestaña." },
+      );
+
+      // Abrir paleta con Ctrl+K.
+      await browser.execute(() => {
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }),
+        );
+      });
+      const paletteInput = await browser.$(".pas-pal-q");
+      await paletteInput.waitForDisplayed({ timeout: 5_000 });
+
+      // Buscar la primera sesión por subsecuencia ("cl pk") y presionar Enter.
+      await paletteInput.setValue("cl pk");
+      await browser.waitUntil(
+        async () =>
+          browser.execute(
+            (id: string) =>
+              document
+                .querySelector('[data-palette-index="0"]')
+                ?.getAttribute("data-palette-id") === `session:${id}`,
+            firstSessionId!,
+          ),
+        {
+          timeout: 5_000,
+          timeoutMsg: "La primera sesión no quedó primera en la paleta Ctrl+K.",
+        },
+      );
+      await paletteInput.addValue("\uE007");
+
+      await browser.waitUntil(
+        async () => {
+          const state = await browser.execute(() => {
+            const palExists = document.querySelector(".pas-pal") !== null;
+            const visiblePanes = Array.from(
+              document.querySelectorAll<HTMLElement>(".pas-pane.is-focused"),
+            ).filter((el) => el.offsetParent !== null);
+            const activeTabText =
+              document.querySelector(".pas-tab.is-active")?.textContent ?? "";
+            return {
+              palExists,
+              focusedId: visiblePanes[0]?.getAttribute("data-session-id") ?? null,
+              activeTabText,
+            };
+          });
+          return !state.palExists && state.focusedId === firstSessionId;
+        },
+        {
+          timeout: 10_000,
+          interval: 100,
+          timeoutMsg: "Ctrl+K no enfocó la primera sesión al presionar Enter.",
         },
       );
     } finally {

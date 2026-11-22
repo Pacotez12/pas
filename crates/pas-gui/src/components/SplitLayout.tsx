@@ -1,6 +1,7 @@
 import { Fragment, useRef } from "react";
 import type {
   AccountInfo,
+  OpenTarget,
   SessionInfo,
   WorktreeInfo,
   WorktreeStatus,
@@ -22,6 +23,9 @@ interface SplitLayoutProps {
   onSplitSession: (sessionId: string, dir: SplitDir) => void;
   onClosePane: (sessionId: string) => void;
   onOpenInTerminal: (session: SessionInfo, command: string[]) => Promise<void>;
+  onOpenPath: (path: string, target: OpenTarget, line?: number | null) => void;
+  onOpenUrl: (url: string) => void;
+  onCopyPath: (path: string) => void;
   onRemoveExitedSession: (sessionId: string) => Promise<void>;
   onReopenSession: (sessionId: string) => Promise<void>;
   onRemoveWorktree: (
@@ -48,6 +52,9 @@ export function SplitLayout({
   onSplitSession,
   onClosePane,
   onOpenInTerminal,
+  onOpenPath,
+  onOpenUrl,
+  onCopyPath,
   onRemoveExitedSession,
   onReopenSession,
   onRemoveWorktree,
@@ -78,6 +85,9 @@ export function SplitLayout({
           onSplit={(dir) => onSplitSession(node.sessionId, dir)}
           onClose={() => onClosePane(node.sessionId)}
           onOpenInTerminal={onOpenInTerminal}
+          onOpenPath={onOpenPath}
+          onOpenUrl={onOpenUrl}
+          onCopyPath={onCopyPath}
           onRemoveExited={() => onRemoveExitedSession(node.sessionId)}
           onReopen={() => onReopenSession(node.sessionId)}
           onRemoveWorktree={(wt) => onRemoveWorktree(wt, node.sessionId)}
@@ -98,6 +108,9 @@ export function SplitLayout({
         onFocus={() => onFocusSession(node.sessionId)}
         onSplit={(dir) => onSplitSession(node.sessionId, dir)}
         onClose={() => onClosePane(node.sessionId)}
+        onOpenPath={onOpenPath}
+        onOpenUrl={onOpenUrl}
+        onCopyPath={onCopyPath}
         onRemoveExited={() => onRemoveExitedSession(node.sessionId)}
         onReopen={() => onReopenSession(node.sessionId)}
         onRemoveWorktree={(wt) => onRemoveWorktree(wt, node.sessionId)}
@@ -179,6 +192,9 @@ export function SplitLayout({
                 onSplitSession={onSplitSession}
                 onClosePane={onClosePane}
                 onOpenInTerminal={onOpenInTerminal}
+                onOpenPath={onOpenPath}
+                onOpenUrl={onOpenUrl}
+                onCopyPath={onCopyPath}
                 onRemoveExitedSession={onRemoveExitedSession}
                 onReopenSession={onReopenSession}
                 onRemoveWorktree={onRemoveWorktree}

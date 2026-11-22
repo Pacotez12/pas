@@ -376,11 +376,13 @@ impl Bridge {
     }
 
     pub async fn discover_projects(&self) -> Result<Vec<DiscoveredProject>, CoreError> {
-        self.call(METHOD_PROJECT_DISCOVER, json!({})).await
+        let mut client = connect_or_spawn(&self.socket_path).await?;
+        client.call(METHOD_PROJECT_DISCOVER, json!({})).await
     }
 
     pub async fn discover_accounts(&self) -> Result<Vec<DiscoveredAccount>, CoreError> {
-        self.call(METHOD_ACCOUNT_DISCOVER, json!({})).await
+        let mut client = connect_or_spawn(&self.socket_path).await?;
+        client.call(METHOD_ACCOUNT_DISCOVER, json!({})).await
     }
 
     pub async fn session_input(&self, id: String, data_b64: String) -> Result<(), CoreError> {

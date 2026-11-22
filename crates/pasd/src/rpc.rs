@@ -348,21 +348,69 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
         }
         METHOD_OPEN_EXISTS => {
             let params: OpenExistsParams = parse_params(req.params)?;
-            let res = open::open_exists(params, mgr.open_env());
+            let open_env = mgr.open_env().clone();
+            let res = tokio::task::spawn_blocking(move || open::open_exists(params, &open_env))
+                .await
+                .map_err(|err| RpcError {
+                    code: -32603,
+                    message: format!("No se pudo verificar la ruta: {err}"),
+                })?;
             ok_json(res)
         }
         METHOD_PROJECT_DISCOVER => {
-            let list = discover::discover_projects(
-                mgr.store(),
-                mgr.config().discover_dirs.as_deref(),
-                mgr.open_env().home_dir.as_deref(),
+            let added: std::collections::HashSet<std::path::PathBuf> = mgr
+                .store()
+                .list_projects()
+                .map_err(store_error_to_rpc)?
+                .into_iter()
+                .map(|p| std::fs::canonicalize(&p.path).unwrap_or(p.path))
+                .collect();
+            let discover_dirs = mgr.config().discover_dirs.clone();
+            let home_dir = mgr.open_env().home_dir.clone();
+            let handle = tokio::task::spawn_blocking(move || {
+                discover::discover_projects_fs(
+                    added,
+                    discover_dirs,
+                    home_dir,
+                    discover::DEFAULT_MAX_RESULTS,
+                    discover::DEFAULT_TIMEOUT,
+                )
+            });
+            let list = match tokio::time::timeout(
+                discover::DEFAULT_TIMEOUT + Duration::from_millis(500),
+                handle,
             )
-            .map_err(store_error_to_rpc)?;
+            .await
+            {
+                Ok(Ok(items)) => items,
+                Ok(Err(_)) | Err(_) => Vec::new(),
+            };
             ok_json(list)
         }
         METHOD_ACCOUNT_DISCOVER => {
-            let list = discover::discover_accounts(mgr.store(), mgr.open_env().home_dir.as_deref())
-                .map_err(store_error_to_rpc)?;
+            let existing: std::collections::HashMap<std::path::PathBuf, String> = mgr
+                .store()
+                .list_accounts()
+                .map_err(store_error_to_rpc)?
+                .into_iter()
+                .map(|acc| {
+                    let canon = std::fs::canonicalize(&acc.config_dir).unwrap_or(acc.config_dir);
+                    (canon, acc.name)
+                })
+                .collect();
+            let home_dir = mgr.open_env().home_dir.clone();
+            let handle = tokio::task::spawn_blocking(move || {
+                discover::discover_accounts_fs(existing, home_dir)
+            });
+            let list = match tokio::time::timeout(
+                discover::DEFAULT_TIMEOUT + Duration::from_millis(500),
+                handle,
+            )
+            .await
+            {
+                Ok(Ok(items)) => items,
+                Ok(Err(_)) | Err(_) => Vec::new(),
+            };
             ok_json(list)
         }
         other => Err(RpcError {

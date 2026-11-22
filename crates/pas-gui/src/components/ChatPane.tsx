@@ -15,6 +15,7 @@ import {
   api,
   type AccountInfo,
   type ChatEvent,
+  type OpenTarget,
   type PermissionChoice,
   type SessionInfo,
   type WorktreeInfo,
@@ -30,6 +31,8 @@ import {
   type ChatTimelineState,
 } from "../state/chat";
 import type { SplitDir } from "../state/layout";
+import { extractFirstDiffLine, tokenizeText } from "../state/pathDetect";
+import { OpenFolderMenu } from "./OpenFolderMenu";
 import { statusDotClass } from "./Tabs";
 import {
   WorktreeExitedStrip,
@@ -48,10 +51,62 @@ interface ChatPaneProps {
   onSplit: (dir: SplitDir) => void;
   onClose: () => void;
   onOpenInTerminal: (session: SessionInfo, command: string[]) => Promise<void>;
+  onOpenPath: (path: string, target: OpenTarget, line?: number | null) => void;
+  onOpenUrl: (url: string) => void;
+  onCopyPath: (path: string) => void;
   onRemoveExited: () => Promise<void>;
   onReopen: () => Promise<void>;
   onRemoveWorktree: (worktree: WorktreeInfo) => Promise<void>;
   onMergeAndRemoveWorktree: (worktree: WorktreeInfo) => Promise<void>;
+}
+
+function LinkedText({
+  text,
+  onOpenFile,
+  onOpenUrl,
+}: {
+  text: string;
+  onOpenFile: (rawPath: string, line?: number) => void;
+  onOpenUrl: (url: string) => void;
+}) {
+  const tokens = tokenizeText(text);
+  return (
+    <>
+      {tokens.map((tok, i) => {
+        if (tok.kind === "text") {
+          return <span key={i}>{tok.text}</span>;
+        }
+        if (tok.kind === "url") {
+          return (
+            <button
+              key={i}
+              type="button"
+              className="pas-lnkp"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenUrl(tok.url);
+              }}
+            >
+              {tok.text}
+            </button>
+          );
+        }
+        return (
+          <button
+            key={i}
+            type="button"
+            className="pas-lnkp"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenFile(tok.path, tok.line);
+            }}
+          >
+            {tok.text}
+          </button>
+        );
+      })}
+    </>
+  );
 }
 
 function shortenPath(path: string): string {
@@ -103,8 +158,12 @@ function toolStatusText(status: string): string {
 
 function ToolRow({
   item,
+  onOpenFile,
+  onOpenUrl,
 }: {
   item: Extract<ChatItem, { kind: "tool" }>;
+  onOpenFile: (rawPath: string, line?: number) => void;
+  onOpenUrl: (url: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -113,18 +172,31 @@ function ToolRow({
       className={`pas-chat-tool${expanded ? " is-expanded" : ""}`}
       data-tool-id={item.id}
     >
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         className="pas-chat-tool-head"
         aria-expanded={expanded}
         onClick={() => setExpanded((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setExpanded((v) => !v);
+          }
+        }}
       >
         {expanded ? (
           <ChevronDown size={13} strokeWidth={2} className="pas-chat-tool-chev" />
         ) : (
           <ChevronRight size={13} strokeWidth={2} className="pas-chat-tool-chev" />
         )}
-        <span className="pas-chat-tool-title">{item.title || item.id}</span>
+        <span className="pas-chat-tool-title">
+          <LinkedText
+            text={item.title || item.id}
+            onOpenFile={onOpenFile}
+            onOpenUrl={onOpenUrl}
+          />
+        </span>
         <span className="pas-spacer" />
         <span
           className={`pas-chat-tool-status${
@@ -137,7 +209,7 @@ function ToolRow({
         >
           {toolStatusText(item.status)}
         </span>
-      </button>
+      </div>
       {expanded && (
         <div className="pas-chat-tool-body">
           <span>
@@ -154,9 +226,12 @@ function ToolRow({
 
 function DiffCard({
   item,
+  onOpenFile,
 }: {
   item: Extract<ChatItem, { kind: "diff" }>;
+  onOpenFile: (rawPath: string, line?: number) => void;
 }) {
+  const firstLine = extractFirstDiffLine(item.unified);
   const lines = item.unified
     .split("\n")
     .filter(
@@ -169,7 +244,13 @@ function DiffCard({
   return (
     <div className="pas-chat-diff" data-diff-path={item.path}>
       <div className="pas-chat-diff-head">
-        <span className="pas-chat-diff-path">{item.path}</span>
+        <button
+          type="button"
+          className="pas-chat-diff-path pas-lnkp"
+          onClick={() => onOpenFile(item.path, firstLine)}
+        >
+          {item.path}
+        </button>
         <span className="pas-chat-diff-stats">
           +{item.additions} −{item.deletions}
         </span>
@@ -326,6 +407,9 @@ export function ChatPane({
   onSplit,
   onClose,
   onOpenInTerminal,
+  onOpenPath,
+  onOpenUrl,
+  onCopyPath,
   onRemoveExited,
   onReopen,
   onRemoveWorktree,
@@ -358,6 +442,21 @@ export function ChatPane({
     session?.worktree && session.worktree.state !== "removed"
       ? session.worktree
       : null;
+  const sessionFolder = session?.worktree?.path ?? session?.cwd ?? "";
+
+  async function handleOpenFile(rawPath: string, line?: number) {
+    if (!sessionFolder) return;
+    try {
+      const check = await api.openExists(sessionFolder, rawPath);
+      if (check.exists && check.resolved) {
+        onOpenPath(check.resolved, "editor", line ?? null);
+      } else {
+        onOpenPath(rawPath, "editor", line ?? null);
+      }
+    } catch {
+      onOpenPath(rawPath, "editor", line ?? null);
+    }
+  }
 
   useEffect(() => {
     let disposed = false;
@@ -574,6 +673,13 @@ export function ChatPane({
           </button>
         )}
         <div className="pas-pane-actions">
+          {sessionFolder && (
+            <OpenFolderMenu
+              folderPath={sessionFolder}
+              onOpenPath={(path, target) => onOpenPath(path, target)}
+              onCopyPath={onCopyPath}
+            />
+          )}
           <button
             type="button"
             className="pas-pane-btn"
@@ -642,13 +748,30 @@ export function ChatPane({
                     key={item.key}
                     className={`pas-chat-ai${item.streaming ? " is-streaming" : ""}`}
                   >
-                    {item.text}
+                    <LinkedText
+                      text={item.text}
+                      onOpenFile={(rawPath, line) => void handleOpenFile(rawPath, line)}
+                      onOpenUrl={onOpenUrl}
+                    />
                   </div>
                 );
               case "tool":
-                return <ToolRow key={item.key} item={item} />;
+                return (
+                  <ToolRow
+                    key={item.key}
+                    item={item}
+                    onOpenFile={(rawPath, line) => void handleOpenFile(rawPath, line)}
+                    onOpenUrl={onOpenUrl}
+                  />
+                );
               case "diff":
-                return <DiffCard key={item.key} item={item} />;
+                return (
+                  <DiffCard
+                    key={item.key}
+                    item={item}
+                    onOpenFile={(rawPath, line) => void handleOpenFile(rawPath, line)}
+                  />
+                );
               case "permission":
                 return (
                   <PermissionCard

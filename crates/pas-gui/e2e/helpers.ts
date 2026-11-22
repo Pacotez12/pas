@@ -149,8 +149,10 @@ export interface E2EContextOptions {
 
 export class E2EContext {
   readonly tmpDir: string;
+  readonly homeDir: string;
   readonly socketPath: string;
   readonly xdgDataHome: string;
+  readonly xdgConfigHome: string;
   readonly pasDataDir: string;
   readonly layoutFile: string;
   private readonly pasdBinOverride?: string;
@@ -167,15 +169,19 @@ export class E2EContext {
   constructor(opts: E2EContextOptions = {}) {
     ensurePrerequisites();
     this.tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pas-e2e-"));
+    this.homeDir = path.join(this.tmpDir, "home");
     this.socketPath = path.join(this.tmpDir, "pas.sock");
     this.xdgDataHome = path.join(this.tmpDir, "xdg-data");
+    this.xdgConfigHome = path.join(this.tmpDir, "xdg-config");
     this.pasDataDir = path.join(this.xdgDataHome, "pas");
     this.layoutFile = path.join(this.pasDataDir, "gui-layout.json");
     this.pasdBinOverride = opts.pasdBinOverride;
     if (opts.extraPathDir) {
       this.extraPathDirs.push(opts.extraPathDir);
     }
+    fs.mkdirSync(this.homeDir, { recursive: true });
     fs.mkdirSync(this.pasDataDir, { recursive: true });
+    fs.mkdirSync(path.join(this.xdgConfigHome, "pas"), { recursive: true });
 
     this.signalHandler = () => {
       if (this.driverPid !== null) sendSignal(this.driverPid, "SIGKILL");
@@ -190,6 +196,26 @@ export class E2EContext {
     fs.mkdirSync(repoPath, { recursive: true });
     execFileSync("git", ["init", "-q"], { cwd: repoPath });
     return repoPath;
+  }
+
+  writeConfig(toml: string): string {
+    const cfgPath = path.join(this.xdgConfigHome, "pas", "config.toml");
+    fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+    fs.writeFileSync(cfgPath, toml, "utf8");
+    return cfgPath;
+  }
+
+  createFakeEditor(binName = "code"): { editorPath: string; logPath: string } {
+    const binDir = path.join(this.tmpDir, "fake-bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const logPath = path.join(this.tmpDir, "fake-editor.log");
+    const editorPath = path.join(binDir, binName);
+    fs.writeFileSync(
+      editorPath,
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "${logPath}"\n`,
+      { mode: 0o755 },
+    );
+    return { editorPath, logPath };
   }
 
   createFakeAgentAlias(binName: string): string {
@@ -227,14 +253,25 @@ export class E2EContext {
     const currentPath = process.env.PATH ?? "";
     const env: NodeJS.ProcessEnv = {
       ...process.env,
+      HOME: this.homeDir,
       PAS_SOCKET: this.socketPath,
       PAS_BIN: PAS_CLI_BIN,
       XDG_DATA_HOME: this.xdgDataHome,
+      XDG_CONFIG_HOME: this.xdgConfigHome,
       PATH:
         this.extraPathDirs.length > 0
           ? `${this.extraPathDirs.join(":")}:${currentPath}`
           : currentPath,
     };
+    if (!env.XDG_CACHE_HOME && process.env.HOME) {
+      env.XDG_CACHE_HOME = path.join(process.env.HOME, ".cache");
+    }
+    if (!env.XAUTHORITY && process.env.HOME) {
+      const realXauth = path.join(process.env.HOME, ".Xauthority");
+      if (fs.existsSync(realXauth)) {
+        env.XAUTHORITY = realXauth;
+      }
+    }
     if (this.pasdBinOverride) {
       env.PAS_PASD_BIN = this.pasdBinOverride;
     } else {
@@ -370,11 +407,23 @@ export class E2EContext {
 }
 
 async function waitForDialogClosed(browser: Browser): Promise<void> {
-  await browser.waitUntil(
-    async () =>
-      browser.execute(() => document.querySelector(".pas-dialog-backdrop") === null),
-    { timeout: 10_000, interval: 50, timeoutMsg: "El diálogo no se cerró a tiempo." },
-  );
+  try {
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => document.querySelector(".pas-dialog-backdrop") === null),
+      { timeout: 10_000, interval: 50 },
+    );
+  } catch {
+    const diag = await browser.execute(() => {
+      const card = document.querySelector(".pas-dialog-card");
+      const err = document.querySelector(".pas-field-error")?.textContent ?? "";
+      const title = card?.querySelector("h4")?.textContent ?? "";
+      const cwd = (document.querySelector("#ns-cwd") as HTMLInputElement | null)?.value ?? "";
+      const cmd = (document.querySelector("#ns-cmd") as HTMLInputElement | null)?.value ?? "";
+      return { title, err, cwd, cmd };
+    });
+    throw new Error(`El diálogo no se cerró a tiempo. diag=${JSON.stringify(diag)}`);
+  }
 }
 
 export async function addProjectViaUi(browser: Browser, repoPath: string): Promise<void> {

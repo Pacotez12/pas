@@ -1,6 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { ArrowLeft, MoreHorizontal, Plus } from "lucide-react";
-import type { AccountInfo, AgentKind } from "../api/pas";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { ArrowLeft, Check, FolderOpen, MoreHorizontal, Plus, Search } from "lucide-react";
+import {
+  api,
+  type AccountInfo,
+  type AgentKind,
+  type DiscoveredAccount,
+} from "../api/pas";
 import { es } from "../i18n/es";
 import { hooksTargetInfo, quotaPillLabel } from "../state/accounts";
 import { TextPromptDialog } from "./ProjectDialogs";
@@ -53,6 +59,8 @@ export function AccountsView({
   onUninstallHooks,
 }: AccountsViewProps) {
   const [addOpen, setAddOpen] = useState(false);
+  const [addPrefillDir, setAddPrefillDir] = useState<string | null>(null);
+  const [discoverOpen, setDiscoverOpen] = useState(false);
   const [installTarget, setInstallTarget] = useState<AccountInfo | null>(null);
   const [renameTarget, setRenameTarget] = useState<AccountInfo | null>(null);
   const [removeTarget, setRemoveTarget] = useState<AccountInfo | null>(null);
@@ -76,6 +84,7 @@ export function AccountsView({
   useEffect(() => {
     const anyModal =
       addOpen ||
+      discoverOpen ||
       installTarget !== null ||
       renameTarget !== null ||
       removeTarget !== null ||
@@ -89,7 +98,7 @@ export function AccountsView({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [addOpen, installTarget, renameTarget, removeTarget, overflowMenu, onBack]);
+  }, [addOpen, discoverOpen, installTarget, renameTarget, removeTarget, overflowMenu, onBack]);
 
   const claudeAccounts = accounts.filter((a) => a.agent === "claude");
   const codexAccounts = accounts.filter((a) => a.agent === "codex");
@@ -232,10 +241,21 @@ export function AccountsView({
           <button
             type="button"
             className="pas-btn pas-btn-inline"
-            onClick={() => setAddOpen(true)}
+            onClick={() => {
+              setAddPrefillDir(null);
+              setAddOpen(true);
+            }}
           >
             <Plus size={14} strokeWidth={2.2} />
             <span>{es.accounts.addAccount}</span>
+          </button>
+          <button
+            type="button"
+            className="pas-btn pas-btn-inline"
+            onClick={() => setDiscoverOpen(true)}
+          >
+            <Search size={14} strokeWidth={2} />
+            <span>{es.accounts.detectAccounts}</span>
           </button>
         </div>
       </div>
@@ -277,8 +297,23 @@ export function AccountsView({
 
       <AddAccountDialog
         open={addOpen}
-        onClose={() => setAddOpen(false)}
+        initialExistingDir={addPrefillDir}
+        onClose={() => {
+          setAddOpen(false);
+          setAddPrefillDir(null);
+        }}
         onSubmit={onAddAccount}
+      />
+
+      <DiscoverAccountsDialog
+        open={discoverOpen}
+        onClose={() => setDiscoverOpen(false)}
+        onAddAccount={onAddAccount}
+        onChooseFolder={(dir) => {
+          setDiscoverOpen(false);
+          setAddPrefillDir(dir);
+          setAddOpen(true);
+        }}
       />
 
       <InstallHooksDialog
@@ -318,6 +353,7 @@ export function AccountsView({
 
 interface AddAccountDialogProps {
   open: boolean;
+  initialExistingDir?: string | null;
   onClose: () => void;
   onSubmit: (params: {
     agent: AgentKind;
@@ -326,7 +362,12 @@ interface AddAccountDialogProps {
   }) => Promise<void>;
 }
 
-function AddAccountDialog({ open, onClose, onSubmit }: AddAccountDialogProps) {
+function AddAccountDialog({
+  open,
+  initialExistingDir = null,
+  onClose,
+  onSubmit,
+}: AddAccountDialogProps) {
   const [agent, setAgent] = useState<"claude" | "codex">("claude");
   const [name, setName] = useState("");
   const [dirMode, setDirMode] = useState<"new" | "existing">("new");
@@ -338,8 +379,8 @@ function AddAccountDialog({ open, onClose, onSubmit }: AddAccountDialogProps) {
     if (!open) return;
     setAgent("claude");
     setName("");
-    setDirMode("new");
-    setExistingDir("");
+    setDirMode(initialExistingDir ? "existing" : "new");
+    setExistingDir(initialExistingDir ?? "");
     setError(null);
     setSubmitting(false);
 
@@ -352,9 +393,21 @@ function AddAccountDialog({ open, onClose, onSubmit }: AddAccountDialogProps) {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, onClose]);
+  }, [open, initialExistingDir, onClose]);
 
   if (!open) return null;
+
+  async function handleChooseDir() {
+    try {
+      const chosen = await openDialog({ directory: true, multiple: false });
+      if (typeof chosen === "string" && chosen.trim()) {
+        setExistingDir(chosen);
+        setError(null);
+      }
+    } catch (err) {
+      setError(String(err));
+    }
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -458,14 +511,24 @@ function AddAccountDialog({ open, onClose, onSubmit }: AddAccountDialogProps) {
         ) : (
           <div className="pas-field">
             <label htmlFor="acc-dir">{es.accounts.addDialog.existingDirLabel}</label>
-            <input
-              id="acc-dir"
-              className="pas-input pas-input-mono"
-              type="text"
-              value={existingDir}
-              placeholder={es.accounts.addDialog.existingDirPlaceholder}
-              onChange={(e) => setExistingDir(e.target.value)}
-            />
+            <div className="pas-path-row">
+              <input
+                id="acc-dir"
+                className="pas-input pas-input-mono"
+                type="text"
+                value={existingDir}
+                placeholder={es.accounts.addDialog.existingDirPlaceholder}
+                onChange={(e) => setExistingDir(e.target.value)}
+              />
+              <button
+                type="button"
+                className="pas-btn pas-btn-inline"
+                onClick={() => void handleChooseDir()}
+              >
+                <FolderOpen size={13} strokeWidth={2} />
+                <span>{es.accounts.chooseFolder}</span>
+              </button>
+            </div>
           </div>
         )}
 
@@ -486,6 +549,221 @@ function AddAccountDialog({ open, onClose, onSubmit }: AddAccountDialogProps) {
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+function agentLabel(agent: AgentKind): string {
+  if (agent === "claude") return es.newSessionDialog.agents.claude;
+  if (agent === "codex") return es.newSessionDialog.agents.codex;
+  return es.newSessionDialog.agents.agy;
+}
+
+function discoveredAccountSubtitle(item: DiscoveredAccount): string {
+  if (item.already_added_as) {
+    return es.accounts.discoverDialog.alreadyAddedAs(item.already_added_as);
+  }
+  if (item.config_dir.includes("/claude-profiles/")) {
+    return es.accounts.discoverDialog.orcaProfile;
+  }
+  return shortenPath(item.config_dir);
+}
+
+interface DiscoverAccountsDialogProps {
+  open: boolean;
+  onClose: () => void;
+  onAddAccount: (params: {
+    agent: AgentKind;
+    name: string;
+    configDir?: string | null;
+  }) => Promise<void>;
+  onChooseFolder: (dir: string) => void;
+}
+
+function DiscoverAccountsDialog({
+  open,
+  onClose,
+  onAddAccount,
+  onChooseFolder,
+}: DiscoverAccountsDialogProps) {
+  const [items, setItems] = useState<DiscoveredAccount[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedDirs, setSelectedDirs] = useState<Set<string>>(() => new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setError(null);
+    setSubmitting(false);
+
+    let cancelled = false;
+    setLoading(true);
+    void api
+      .discoverAccounts()
+      .then((list) => {
+        if (cancelled) return;
+        setItems(list);
+        setSelectedDirs(
+          new Set(
+            list.filter((a) => !a.already_added_as).map((a) => a.config_dir),
+          ),
+        );
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setItems([]);
+          setSelectedDirs(new Set());
+          setError(String(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  function toggleItem(item: DiscoveredAccount) {
+    if (item.already_added_as) return;
+    setSelectedDirs((prev) => {
+      const next = new Set(prev);
+      if (next.has(item.config_dir)) next.delete(item.config_dir);
+      else next.add(item.config_dir);
+      return next;
+    });
+  }
+
+  async function handleChooseFolder() {
+    try {
+      const chosen = await openDialog({ directory: true, multiple: false });
+      if (typeof chosen === "string" && chosen.trim()) {
+        onChooseFolder(chosen);
+      }
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  const toAdd = items.filter(
+    (item) => !item.already_added_as && selectedDirs.has(item.config_dir),
+  );
+
+  async function handleSubmit() {
+    if (toAdd.length === 0 || submitting) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      for (const item of toAdd) {
+        await onAddAccount({
+          agent: item.agent,
+          name: item.suggested_name,
+          configDir: item.config_dir,
+        });
+      }
+      onClose();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="pas-dialog-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="discover-accounts-title"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="pas-dialog-card is-discover-accounts">
+        <h4 id="discover-accounts-title">{es.accounts.discoverDialog.title}</h4>
+
+        {loading ? (
+          <div className="pas-sug-empty">{es.accounts.discoverDialog.loading}</div>
+        ) : items.length === 0 ? (
+          <div className="pas-sug-empty">{es.accounts.discoverDialog.empty}</div>
+        ) : (
+          <div className="pas-sug" role="listbox" aria-multiselectable="true">
+            {items.map((item) => {
+              const disabled = Boolean(item.already_added_as);
+              const selected = !disabled && selectedDirs.has(item.config_dir);
+              return (
+                <button
+                  key={item.config_dir}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  disabled={disabled}
+                  className={`pas-sug-row${selected ? " is-selected" : ""}${disabled ? " is-disabled" : ""}`}
+                  onClick={() => toggleItem(item)}
+                >
+                  <span
+                    className={`pas-sug-box${selected ? " is-checked" : ""}`}
+                  >
+                    {selected && <Check size={10} strokeWidth={3} />}
+                  </span>
+                  <span className="pas-sug-name">
+                    <b className="pas-sug-agent">{agentLabel(item.agent)}</b>
+                    <span className="pas-sug-sub">
+                      {" · "}
+                      {discoveredAccountSubtitle(item)}
+                    </span>
+                  </span>
+                  <span className="pas-sug-path" title={item.config_dir}>
+                    {shortenPath(item.config_dir)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <p className="pas-sug-hint">{es.accounts.discoverDialog.hint}</p>
+
+        {error && <p className="pas-field-error">{error}</p>}
+
+        <div className="pas-dialog-actions is-split">
+          <button
+            type="button"
+            className="pas-btn pas-btn-inline"
+            onClick={() => void handleChooseFolder()}
+          >
+            <FolderOpen size={13} strokeWidth={2} />
+            <span>{es.accounts.discoverDialog.chooseFolder}</span>
+          </button>
+          <span className="pas-spacer" />
+          <button type="button" className="pas-btn" onClick={onClose}>
+            {es.accounts.discoverDialog.cancel}
+          </button>
+          <button
+            type="button"
+            className="pas-btn is-primary"
+            disabled={submitting || toAdd.length === 0}
+            onClick={() => void handleSubmit()}
+          >
+            {submitting
+              ? es.accounts.discoverDialog.submitting
+              : es.accounts.discoverDialog.submitCount(toAdd.length)}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -182,6 +182,27 @@ export interface SessionRemovedEvent {
 
 export type ConnectionStatus = "connected" | "disconnected";
 
+export type OpenTarget = "editor" | "files" | "terminal";
+
+export interface OpenExistsResult {
+  exists: boolean;
+  resolved?: string | null;
+  is_dir: boolean;
+}
+
+export interface DiscoveredProject {
+  name: string;
+  path: string;
+  remote_key?: string | null;
+}
+
+export interface DiscoveredAccount {
+  agent: AgentKind;
+  suggested_name: string;
+  config_dir: string;
+  already_added_as?: string | null;
+}
+
 export const api = {
   listProjects: () => invoke<ProjectInfo[]>("list_projects"),
   addProject: (path: string, name?: string) =>
@@ -300,6 +321,13 @@ export const api = {
   worktreeMerge: (id: string) => invoke<WorktreeInfo>("worktree_merge", { id }),
   worktreeRemove: (id: string, confirmLoss: boolean) =>
     invoke<void>("worktree_remove", { id, confirmLoss }),
+
+  openPath: (path: string, target: OpenTarget, line?: number | null) =>
+    invoke<void>("open_path", { path, target, line: line ?? null }),
+  openExists: (cwd: string, path: string) =>
+    invoke<OpenExistsResult>("open_exists", { cwd, path }),
+  discoverProjects: () => invoke<DiscoveredProject[]>("discover_projects"),
+  discoverAccounts: () => invoke<DiscoveredAccount[]>("discover_accounts"),
 
   sessionInput: (id: string, dataB64: string) =>
     invoke<void>("session_input", { id, dataB64 }),

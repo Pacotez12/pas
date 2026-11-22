@@ -1,10 +1,18 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { Check, FolderOpen } from "lucide-react";
+import { api, type DiscoveredProject } from "../api/pas";
 import { es } from "../i18n/es";
+
+function shortenPath(path: string): string {
+  const match = path.match(/^\/home\/[^/]+(.*)$/);
+  return match ? `~${match[1]}` : path;
+}
 
 interface AddProjectDialogProps {
   open: boolean;
   onClose: () => void;
-  onSubmit: (path: string, name?: string) => Promise<void>;
+  onSubmit: (paths: string[]) => Promise<void>;
 }
 
 export function AddProjectDialog({
@@ -13,16 +21,39 @@ export function AddProjectDialog({
   onSubmit,
 }: AddProjectDialogProps) {
   const [path, setPath] = useState("");
-  const [name, setName] = useState("");
+  const [discovered, setDiscovered] = useState<DiscoveredProject[]>([]);
+  const [loadingDiscovered, setLoadingDiscovered] = useState(false);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setPath("");
-    setName("");
+    setSelectedPaths(new Set());
     setError(null);
     setSubmitting(false);
+
+    let cancelled = false;
+    setLoadingDiscovered(true);
+    void api
+      .discoverProjects()
+      .then((list) => {
+        if (!cancelled) {
+          setDiscovered(list);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDiscovered([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingDiscovered(false);
+        }
+      });
+
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -31,22 +62,56 @@ export function AddProjectDialog({
       }
     };
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("keydown", onKey, true);
+    };
   }, [open, onClose]);
 
   if (!open) return null;
 
+  function toggleSuggested(p: string) {
+    setSelectedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(p)) next.delete(p);
+      else next.add(p);
+      return next;
+    });
+  }
+
+  async function handleChooseFolder() {
+    try {
+      const chosen = await openDialog({
+        directory: true,
+        multiple: false,
+      });
+      if (typeof chosen === "string" && chosen.trim()) {
+        setPath(chosen);
+        setError(null);
+      }
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  const trimmedPath = path.trim();
+  const combinedPaths = Array.from(
+    new Set([
+      ...(trimmedPath ? [trimmedPath] : []),
+      ...Array.from(selectedPaths),
+    ]),
+  );
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const trimmed = path.trim();
-    if (!trimmed) {
+    if (combinedPaths.length === 0) {
       setError(es.addProjectDialog.errorEmptyPath);
       return;
     }
     setError(null);
     setSubmitting(true);
     try {
-      await onSubmit(trimmed, name.trim() || undefined);
+      await onSubmit(combinedPaths);
       onClose();
     } catch (err) {
       setError(String(err));
@@ -54,6 +119,12 @@ export function AddProjectDialog({
       setSubmitting(false);
     }
   }
+
+  const submitLabel = submitting
+    ? es.addProjectDialog.submitting
+    : combinedPaths.length > 0
+      ? es.addProjectDialog.submitCount(combinedPaths.length)
+      : es.addProjectDialog.submit;
 
   return (
     <div
@@ -65,32 +136,74 @@ export function AddProjectDialog({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <form className="pas-dialog-card" onSubmit={handleSubmit}>
+      <form className="pas-dialog-card is-project-add" onSubmit={handleSubmit}>
         <h4 id="add-project-title">{es.addProjectDialog.title}</h4>
+
         <div className="pas-field">
           <label htmlFor="ap-path">{es.addProjectDialog.pathLabel}</label>
-          <input
-            id="ap-path"
-            className="pas-input"
-            type="text"
-            autoFocus
-            value={path}
-            placeholder={es.addProjectDialog.pathPlaceholder}
-            onChange={(e) => setPath(e.target.value)}
-          />
+          <div className="pas-path-row">
+            <input
+              id="ap-path"
+              className="pas-input"
+              type="text"
+              autoFocus
+              value={path}
+              placeholder={es.addProjectDialog.pathPlaceholder}
+              onChange={(e) => setPath(e.target.value)}
+            />
+            <button
+              type="button"
+              className="pas-btn pas-btn-inline"
+              onClick={() => void handleChooseFolder()}
+            >
+              <FolderOpen size={13} strokeWidth={2} />
+              <span>{es.addProjectDialog.chooseFolder}</span>
+            </button>
+          </div>
         </div>
+
         <div className="pas-field">
-          <label htmlFor="ap-name">{es.addProjectDialog.nameLabel}</label>
-          <input
-            id="ap-name"
-            className="pas-input"
-            type="text"
-            value={name}
-            placeholder={es.addProjectDialog.namePlaceholder}
-            onChange={(e) => setName(e.target.value)}
-          />
+          <label>{es.addProjectDialog.discoveredLabel}</label>
+          {loadingDiscovered ? (
+            <div className="pas-sug-empty">
+              {es.addProjectDialog.discoveredLoading}
+            </div>
+          ) : discovered.length === 0 ? (
+            <div className="pas-sug-empty">
+              {es.addProjectDialog.discoveredEmpty}
+            </div>
+          ) : (
+            <div className="pas-sug" role="listbox" aria-multiselectable="true">
+              {discovered.map((item) => {
+                const isSelected = selectedPaths.has(item.path);
+                return (
+                  <button
+                    key={item.path}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    data-discovered-path={item.path}
+                    className={`pas-sug-row${isSelected ? " is-selected" : ""}`}
+                    onClick={() => toggleSuggested(item.path)}
+                  >
+                    <span
+                      className={`pas-sug-box${isSelected ? " is-checked" : ""}`}
+                    >
+                      {isSelected && <Check size={10} strokeWidth={3} />}
+                    </span>
+                    <span className="pas-sug-name">{item.name}</span>
+                    <span className="pas-sug-path" title={item.path}>
+                      {shortenPath(item.path)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
+
         {error && <p className="pas-field-error">{error}</p>}
+
         <div className="pas-dialog-actions">
           <button type="button" className="pas-btn" onClick={onClose}>
             {es.addProjectDialog.cancel}
@@ -100,9 +213,7 @@ export function AddProjectDialog({
             className="pas-btn is-primary"
             disabled={submitting}
           >
-            {submitting
-              ? es.addProjectDialog.submitting
-              : es.addProjectDialog.submit}
+            {submitLabel}
           </button>
         </div>
       </form>

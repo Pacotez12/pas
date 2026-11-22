@@ -2,13 +2,18 @@ import { useEffect, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
+  Code2,
+  Copy,
   Folder,
+  FolderOpen,
   GitBranch,
   Plus,
+  Terminal,
 } from "lucide-react";
 import type {
   AccountInfo,
   GroupInfo,
+  OpenTarget,
   ProjectInfo,
   SessionInfo,
   SessionState,
@@ -23,8 +28,11 @@ interface SidebarProps {
   accountsById: Map<string, AccountInfo>;
   activeSessionId: string | null;
   onNewSession: () => void;
+  onNewSessionForProject: (project: ProjectInfo) => void;
   onSelectSession: (sessionId: string) => void;
   onAddProject: () => void;
+  onOpenProjectPath: (project: ProjectInfo, target: OpenTarget) => void;
+  onCopyPath: (path: string) => void;
   onRenameProject: (project: ProjectInfo) => void;
   onMoveProject: (projectId: string, groupId: string) => void;
   onCreateGroupAndMove: (project: ProjectInfo) => void;
@@ -77,8 +85,11 @@ export function Sidebar({
   accountsById,
   activeSessionId,
   onNewSession,
+  onNewSessionForProject,
   onSelectSession,
   onAddProject,
+  onOpenProjectPath,
+  onCopyPath,
   onRenameProject,
   onMoveProject,
   onCreateGroupAndMove,
@@ -194,13 +205,13 @@ export function Sidebar({
   }
 
   const repoMenuPos = repoMenu
-    ? clampMenuPosition(repoMenu.x, repoMenu.y, 230, 170)
+    ? clampMenuPosition(repoMenu.x, repoMenu.y, 260, 340)
     : null;
   const submenuPos =
     repoMenu && repoMenuPos && repoMenu.showMoveSubmenu
       ? clampMenuPosition(
-          repoMenuPos.left + 234,
-          repoMenuPos.top + 28,
+          repoMenuPos.left + 264,
+          repoMenuPos.top + 188,
           200,
           Math.min(320, groups.length * 32 + 50),
         )
@@ -402,11 +413,98 @@ export function Sidebar({
 
       {repoMenu && repoMenuPos && (
         <div
-          className="pas-menu"
+          className="pas-menu pas-project-menu"
           role="menu"
           style={{ left: repoMenuPos.left, top: repoMenuPos.top }}
           onMouseDown={(e) => e.stopPropagation()}
         >
+          <button
+            type="button"
+            role="menuitem"
+            className="pas-menu-item"
+            onMouseEnter={() =>
+              setRepoMenu((cur) => (cur ? { ...cur, showMoveSubmenu: false } : null))
+            }
+            onClick={() => {
+              const target = repoMenu.project;
+              setRepoMenu(null);
+              onOpenProjectPath(target, "editor");
+            }}
+          >
+            <Code2 size={14} strokeWidth={2} className="pas-menu-ico" />
+            <span>{es.contextMenu.openInEditor}</span>
+            <kbd className="pas-menu-kbd">{es.contextMenu.openInEditorShortcut}</kbd>
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            className="pas-menu-item"
+            onMouseEnter={() =>
+              setRepoMenu((cur) => (cur ? { ...cur, showMoveSubmenu: false } : null))
+            }
+            onClick={() => {
+              const target = repoMenu.project;
+              setRepoMenu(null);
+              onOpenProjectPath(target, "files");
+            }}
+          >
+            <FolderOpen size={14} strokeWidth={2} className="pas-menu-ico" />
+            <span>{es.contextMenu.openInFiles}</span>
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            className="pas-menu-item"
+            onMouseEnter={() =>
+              setRepoMenu((cur) => (cur ? { ...cur, showMoveSubmenu: false } : null))
+            }
+            onClick={() => {
+              const target = repoMenu.project;
+              setRepoMenu(null);
+              onOpenProjectPath(target, "terminal");
+            }}
+          >
+            <Terminal size={14} strokeWidth={2} className="pas-menu-ico" />
+            <span>{es.contextMenu.openInTerminal}</span>
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            className="pas-menu-item"
+            onMouseEnter={() =>
+              setRepoMenu((cur) => (cur ? { ...cur, showMoveSubmenu: false } : null))
+            }
+            onClick={() => {
+              const target = repoMenu.project;
+              setRepoMenu(null);
+              onCopyPath(target.path);
+            }}
+          >
+            <Copy size={14} strokeWidth={2} className="pas-menu-ico" />
+            <span>{es.contextMenu.copyPath}</span>
+          </button>
+
+          <div className="pas-menu-sep" />
+
+          <button
+            type="button"
+            role="menuitem"
+            className="pas-menu-item"
+            onMouseEnter={() =>
+              setRepoMenu((cur) => (cur ? { ...cur, showMoveSubmenu: false } : null))
+            }
+            onClick={() => {
+              const target = repoMenu.project;
+              setRepoMenu(null);
+              onNewSessionForProject(target);
+            }}
+          >
+            {es.contextMenu.newSessionIn(repoMenu.project.name)}
+          </button>
+
           <button
             type="button"
             role="menuitem"

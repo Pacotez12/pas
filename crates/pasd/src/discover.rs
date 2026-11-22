@@ -36,8 +36,29 @@ pub fn discover_projects_with_limits(
     max_results: usize,
     timeout: Duration,
 ) -> Result<Vec<DiscoveredProject>, StoreError> {
+    let added: HashSet<PathBuf> = store
+        .list_projects()?
+        .into_iter()
+        .map(|p| fs::canonicalize(&p.path).unwrap_or(p.path))
+        .collect();
+    Ok(discover_projects_fs(
+        added,
+        discover_dirs.map(|d| d.to_vec()),
+        home_dir.map(Path::to_path_buf),
+        max_results,
+        timeout,
+    ))
+}
+
+pub fn discover_projects_fs(
+    added: HashSet<PathBuf>,
+    discover_dirs: Option<Vec<PathBuf>>,
+    home_dir: Option<PathBuf>,
+    max_results: usize,
+    timeout: Duration,
+) -> Vec<DiscoveredProject> {
     let started = Instant::now();
-    let home = resolve_home(home_dir);
+    let home = resolve_home(home_dir.as_deref());
 
     let roots: Vec<PathBuf> = match discover_dirs {
         Some(dirs) => dirs
@@ -54,12 +75,6 @@ pub fn discover_projects_with_limits(
             None => Vec::new(),
         },
     };
-
-    let added: HashSet<PathBuf> = store
-        .list_projects()?
-        .into_iter()
-        .map(|p| fs::canonicalize(&p.path).unwrap_or(p.path))
-        .collect();
 
     let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
     for root in roots {
@@ -90,7 +105,11 @@ pub fn discover_projects_with_limits(
                     .map(|n| n.to_string_lossy().into_owned())
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| "proyecto".into());
-                let remote_key = read_origin_remote_key(&canon);
+                let remote_key = if started.elapsed() < timeout {
+                    read_origin_remote_key(&canon)
+                } else {
+                    None
+                };
                 results.push(DiscoveredProject {
                     name,
                     path: canon,
@@ -133,17 +152,13 @@ pub fn discover_projects_with_limits(
             .cmp(&b.name.to_lowercase())
             .then_with(|| a.path.cmp(&b.path))
     });
-    Ok(results)
+    results
 }
 
 pub fn discover_accounts(
     store: &Store,
     home_dir: Option<&Path>,
 ) -> Result<Vec<DiscoveredAccount>, StoreError> {
-    let Some(home) = resolve_home(home_dir) else {
-        return Ok(Vec::new());
-    };
-
     let existing: HashMap<PathBuf, String> = store
         .list_accounts()?
         .into_iter()
@@ -152,6 +167,19 @@ pub fn discover_accounts(
             (canon, acc.name)
         })
         .collect();
+    Ok(discover_accounts_fs(
+        existing,
+        home_dir.map(Path::to_path_buf),
+    ))
+}
+
+pub fn discover_accounts_fs(
+    existing: HashMap<PathBuf, String>,
+    home_dir: Option<PathBuf>,
+) -> Vec<DiscoveredAccount> {
+    let Some(home) = resolve_home(home_dir.as_deref()) else {
+        return Vec::new();
+    };
 
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut results: Vec<DiscoveredAccount> = Vec::new();
@@ -194,7 +222,7 @@ pub fn discover_accounts(
     push_candidate(AgentKind::Claude, "Claude".into(), home.join(".claude"));
     push_candidate(AgentKind::Codex, "Codex".into(), home.join(".codex"));
 
-    Ok(results)
+    results
 }
 
 fn resolve_home(home_dir: Option<&Path>) -> Option<PathBuf> {
