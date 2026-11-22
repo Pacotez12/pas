@@ -76,9 +76,18 @@ struct EventSink {
     history: Arc<Mutex<Vec<ChatEvent>>>,
     history_file: Option<PathBuf>,
     events_tx: broadcast::Sender<Notification>,
+    cwd: PathBuf,
 }
 
 impl EventSink {
+    fn emit_diff(&self, path: &Path, old_text: Option<&str>, new_text: &str) {
+        let shown = display_path(&self.cwd, path);
+        self.emit(ChatEvent::Diff {
+            unified: format_unified_diff(Path::new(&shown), old_text, new_text),
+            path: shown,
+        });
+    }
+
     fn emit(&self, event: ChatEvent) {
         if let Ok(mut guard) = self.history.lock() {
             guard.push(event.clone());
@@ -207,6 +216,7 @@ impl ChatSession {
             history: Arc::clone(&history),
             history_file,
             events_tx,
+            cwd: p.cwd.clone(),
         };
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<ChatCommand>();
         let pending_permissions: Arc<Mutex<HashMap<String, PendingPermission>>> =
@@ -666,12 +676,7 @@ fn handle_session_update(
             });
             for content in tc.content {
                 if let ToolCallContent::Diff(diff) = content {
-                    let unified =
-                        format_unified_diff(&diff.path, diff.old_text.as_deref(), &diff.new_text);
-                    sink.emit(ChatEvent::Diff {
-                        path: diff.path.to_string_lossy().into_owned(),
-                        unified,
-                    });
+                    sink.emit_diff(&diff.path, diff.old_text.as_deref(), &diff.new_text);
                 }
             }
         }
@@ -709,15 +714,7 @@ fn handle_session_update(
             if let Some(contents) = upd.fields.content {
                 for content in contents {
                     if let ToolCallContent::Diff(diff) = content {
-                        let unified = format_unified_diff(
-                            &diff.path,
-                            diff.old_text.as_deref(),
-                            &diff.new_text,
-                        );
-                        sink.emit(ChatEvent::Diff {
-                            path: diff.path.to_string_lossy().into_owned(),
-                            unified,
-                        });
+                        sink.emit_diff(&diff.path, diff.old_text.as_deref(), &diff.new_text);
                     }
                 }
             }
@@ -798,6 +795,14 @@ fn format_tool_status(status: ToolCallStatus) -> &'static str {
     }
 }
 
+/// Path relative to the session cwd when it lives inside it (agents send absolute paths).
+fn display_path(cwd: &Path, path: &Path) -> String {
+    path.strip_prefix(cwd)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn format_unified_diff(path: &Path, old_text: Option<&str>, new_text: &str) -> String {
     let path_str = path.to_string_lossy();
     let mut out = format!("--- a/{path_str}\n+++ b/{path_str}\n");
@@ -868,6 +873,17 @@ mod tests {
     }
 
     #[test]
+    fn diff_paths_are_shown_relative_to_cwd() {
+        let cwd = Path::new("/home/u/repo");
+        assert_eq!(
+            display_path(cwd, Path::new("/home/u/repo/src/a.rs")),
+            "src/a.rs"
+        );
+        assert_eq!(display_path(cwd, Path::new("/etc/hosts")), "/etc/hosts");
+        assert_eq!(display_path(cwd, Path::new("src/b.rs")), "src/b.rs");
+    }
+
+    #[test]
     fn permission_choices_never_pick_persistent_options() {
         let options = vec![
             PermissionOption::new("always", "siempre", PermissionOptionKind::AllowAlways),
@@ -908,6 +924,7 @@ mod tests {
             history: Arc::clone(&history),
             history_file: None,
             events_tx,
+            cwd: PathBuf::from("/"),
         };
         let tool_titles = Mutex::new(HashMap::new());
         let seen_visuals = Mutex::new(HashSet::new());
