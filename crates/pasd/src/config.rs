@@ -77,6 +77,12 @@ pub struct Config {
 
     #[serde(default)]
     pub worktrees_dir: Option<PathBuf>,
+
+    #[serde(default)]
+    pub editor: Option<String>,
+
+    #[serde(default)]
+    pub discover_dirs: Option<Vec<PathBuf>>,
 }
 
 impl Default for Config {
@@ -87,6 +93,8 @@ impl Default for Config {
             waiting_patterns: default_waiting_patterns(),
             busy_patterns: default_busy_patterns(),
             worktrees_dir: None,
+            editor: None,
+            discover_dirs: None,
         }
     }
 }
@@ -107,6 +115,12 @@ struct RawConfig {
 
     #[serde(default)]
     worktrees_dir: Option<PathBuf>,
+
+    #[serde(default)]
+    editor: Option<String>,
+
+    #[serde(default)]
+    discover_dirs: Option<Vec<PathBuf>>,
 }
 
 impl Config {
@@ -158,12 +172,19 @@ impl Config {
             busy_patterns.insert(agent, patterns);
         }
 
+        let editor = raw
+            .editor
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
         let cfg = Self {
             notifications: raw.notifications,
             quota_warn_percent: raw.quota_warn_percent,
             waiting_patterns,
             busy_patterns,
             worktrees_dir: raw.worktrees_dir,
+            editor,
+            discover_dirs: raw.discover_dirs,
         };
         cfg.validate()?;
         Ok(cfg)

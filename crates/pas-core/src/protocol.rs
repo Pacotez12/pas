@@ -50,6 +50,10 @@ pub const METHOD_WORKTREE_MERGE: &str = "worktree.merge";
 pub const METHOD_WORKTREE_REMOVE: &str = "worktree.remove";
 pub const METHOD_WORKTREE_SUGGEST_BRANCH: &str = "worktree.suggest_branch";
 pub const METHOD_WORKTREE_BRANCHES: &str = "worktree.branches";
+pub const METHOD_OPEN_PATH: &str = "open.path";
+pub const METHOD_OPEN_EXISTS: &str = "open.exists";
+pub const METHOD_PROJECT_DISCOVER: &str = "project.discover";
+pub const METHOD_ACCOUNT_DISCOVER: &str = "account.discover";
 
 pub const EVENT_SESSION_OUTPUT: &str = "session.output";
 pub const EVENT_SESSION_STATE: &str = "session.state";
@@ -88,6 +92,10 @@ pub const ERR_WORKTREE_MERGE_CONFLICT: i32 = 1023;
 pub const ERR_WORKTREE_CONFIRM_REQUIRED: i32 = 1024;
 pub const ERR_WORKTREE_BRANCH_EXISTS: i32 = 1025;
 pub const ERR_WORKTREE_GIT_FAILED: i32 = 1026;
+pub const ERR_PATH_NOT_FOUND: i32 = 1027;
+pub const ERR_PATH_OUTSIDE_PROJECT: i32 = 1028;
+pub const ERR_EDITOR_NOT_FOUND: i32 = 1029;
+pub const ERR_OPEN_FAILED: i32 = 1030;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
@@ -698,4 +706,52 @@ pub struct WorktreeBranchesResult {
     #[serde(default)]
     pub current: Option<String>,
     pub branches: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OpenTarget {
+    Editor,
+    Files,
+    Terminal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenPathParams {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub line: Option<u32>,
+    pub target: OpenTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenExistsParams {
+    pub cwd: PathBuf,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenExistsResult {
+    pub exists: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<PathBuf>,
+    #[serde(default)]
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscoveredProject {
+    pub name: String,
+    pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_key: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscoveredAccount {
+    pub agent: AgentKind,
+    pub suggested_name: String,
+    pub config_dir: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub already_added_as: Option<String>,
 }

@@ -3,9 +3,10 @@ use std::path::{Component, Path, PathBuf};
 
 use pas_core::protocol::{
     AccountInfo, AccountQuota, AcpAdapterStatus, AgentKind, ChatEvent, ClaudeConversation,
-    CreateParams, CreateResult, GroupInfo, Mode, PermissionChoice, ProjectInfo, SessionInfo,
-    SnapshotResult, WorktreeBranchesResult, WorktreeCreateParams, WorktreeInfo, WorktreeListItem,
-    WorktreeRequest, WorktreeSuggestBranchParams, WorktreeSuggestBranchResult,
+    CreateParams, CreateResult, DiscoveredAccount, DiscoveredProject, GroupInfo, Mode,
+    OpenExistsResult, OpenTarget, PermissionChoice, ProjectInfo, SessionInfo, SnapshotResult,
+    WorktreeBranchesResult, WorktreeCreateParams, WorktreeInfo, WorktreeListItem, WorktreeRequest,
+    WorktreeSuggestBranchParams, WorktreeSuggestBranchResult,
 };
 use tauri::State;
 
@@ -349,6 +350,45 @@ pub async fn worktree_remove(
         .worktree_remove(id, confirm_loss)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn open_path(
+    bridge: State<'_, Bridge>,
+    path: String,
+    line: Option<u32>,
+    target: OpenTarget,
+) -> Result<(), String> {
+    bridge
+        .open_path(PathBuf::from(path), line, target)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn open_exists(
+    bridge: State<'_, Bridge>,
+    cwd: String,
+    path: String,
+) -> Result<OpenExistsResult, String> {
+    bridge
+        .open_exists(PathBuf::from(cwd), path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn discover_projects(
+    bridge: State<'_, Bridge>,
+) -> Result<Vec<DiscoveredProject>, String> {
+    bridge.discover_projects().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn discover_accounts(
+    bridge: State<'_, Bridge>,
+) -> Result<Vec<DiscoveredAccount>, String> {
+    bridge.discover_accounts().await.map_err(|e| e.to_string())
 }
 
 fn pas_data_dir_path() -> Result<PathBuf, String> {

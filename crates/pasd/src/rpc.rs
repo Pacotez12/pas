@@ -9,18 +9,19 @@ use pas_core::protocol::{
     ERR_GROUP_ALREADY_EXISTS, ERR_GROUP_NOT_FOUND, ERR_HOOKS_CONFIG_INVALID, ERR_INVALID_PARAMS,
     ERR_METHOD_NOT_FOUND, ERR_NOT_A_GIT_REPO, ERR_PROJECT_ALREADY_EXISTS, ERR_PROJECT_NOT_FOUND,
     ERR_WORKTREE_NOT_FOUND, GroupCreateParams, GroupRenameParams, HookParams, IdParams,
-    InputParams, METHOD_ACCOUNT_ADD, METHOD_ACCOUNT_INSTALL_HOOKS, METHOD_ACCOUNT_LIST,
-    METHOD_ACCOUNT_REMOVE, METHOD_ACCOUNT_RENAME, METHOD_ACCOUNT_UNINSTALL_HOOKS,
-    METHOD_ACP_INSTALL, METHOD_ACP_STATUS, METHOD_CHAT_CANCEL, METHOD_CHAT_HISTORY,
-    METHOD_CHAT_PERMISSION, METHOD_CHAT_PROMPT, METHOD_CHAT_TERMINAL_COMMAND,
+    InputParams, METHOD_ACCOUNT_ADD, METHOD_ACCOUNT_DISCOVER, METHOD_ACCOUNT_INSTALL_HOOKS,
+    METHOD_ACCOUNT_LIST, METHOD_ACCOUNT_REMOVE, METHOD_ACCOUNT_RENAME,
+    METHOD_ACCOUNT_UNINSTALL_HOOKS, METHOD_ACP_INSTALL, METHOD_ACP_STATUS, METHOD_CHAT_CANCEL,
+    METHOD_CHAT_HISTORY, METHOD_CHAT_PERMISSION, METHOD_CHAT_PROMPT, METHOD_CHAT_TERMINAL_COMMAND,
     METHOD_CLAUDE_CONVERSATIONS, METHOD_DAEMON_PING, METHOD_GROUP_CREATE, METHOD_GROUP_LIST,
-    METHOD_GROUP_RENAME, METHOD_PROJECT_ADD, METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE,
-    METHOD_PROJECT_REMOVE, METHOD_PROJECT_RENAME, METHOD_PROJECT_UNPIN, METHOD_QUOTA_LIST,
-    METHOD_QUOTA_REPORT, METHOD_SESSION_CREATE, METHOD_SESSION_HOOK, METHOD_SESSION_INPUT,
-    METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_REMOVE,
-    METHOD_SESSION_RESIZE, METHOD_SESSION_SEND, METHOD_SESSION_SNAPSHOT, METHOD_SESSION_WAIT,
-    METHOD_WORKTREE_BRANCHES, METHOD_WORKTREE_CREATE, METHOD_WORKTREE_LIST, METHOD_WORKTREE_MERGE,
-    METHOD_WORKTREE_REMOVE, METHOD_WORKTREE_SUGGEST_BRANCH, PingResult, ProjectAddParams,
+    METHOD_GROUP_RENAME, METHOD_OPEN_EXISTS, METHOD_OPEN_PATH, METHOD_PROJECT_ADD,
+    METHOD_PROJECT_DISCOVER, METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE, METHOD_PROJECT_REMOVE,
+    METHOD_PROJECT_RENAME, METHOD_PROJECT_UNPIN, METHOD_QUOTA_LIST, METHOD_QUOTA_REPORT,
+    METHOD_SESSION_CREATE, METHOD_SESSION_HOOK, METHOD_SESSION_INPUT, METHOD_SESSION_KILL,
+    METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_REMOVE, METHOD_SESSION_RESIZE,
+    METHOD_SESSION_SEND, METHOD_SESSION_SNAPSHOT, METHOD_SESSION_WAIT, METHOD_WORKTREE_BRANCHES,
+    METHOD_WORKTREE_CREATE, METHOD_WORKTREE_LIST, METHOD_WORKTREE_MERGE, METHOD_WORKTREE_REMOVE,
+    METHOD_WORKTREE_SUGGEST_BRANCH, OpenExistsParams, OpenPathParams, PingResult, ProjectAddParams,
     ProjectMoveParams, ProjectRenameParams, QuotaReportParams, ReadParams, ReadResult, Request,
     ResizeParams, Response, RpcError, SendParams, SendResult, SnapshotResult, WaitParams,
     WorktreeBranchesParams, WorktreeCreateParams, WorktreeListParams, WorktreeRemoveParams,
@@ -31,8 +32,10 @@ use serde_json::{Value, json};
 
 use crate::accounts::{self, AccountHooksError};
 use crate::claude;
+use crate::discover;
 use crate::hooks_install::HooksInstallError;
 use crate::manager::{Manager, session_error_to_rpc};
+use crate::open;
 use crate::store::StoreError;
 use crate::worktree;
 
@@ -329,6 +332,38 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
             worktree::remove(mgr.store(), &params.id, params.confirm_loss)
                 .map_err(worktree::worktree_error_to_rpc)?;
             Ok(json!({}))
+        }
+        METHOD_OPEN_PATH => {
+            let params: OpenPathParams = parse_params(req.params)?;
+            let allowed = mgr.allowed_open_roots();
+            open::open_path(
+                params,
+                mgr.config().editor.as_deref(),
+                &allowed,
+                mgr.open_env(),
+                mgr.launcher(),
+            )
+            .map_err(open::open_error_to_rpc)?;
+            Ok(json!({}))
+        }
+        METHOD_OPEN_EXISTS => {
+            let params: OpenExistsParams = parse_params(req.params)?;
+            let res = open::open_exists(params, mgr.open_env());
+            ok_json(res)
+        }
+        METHOD_PROJECT_DISCOVER => {
+            let list = discover::discover_projects(
+                mgr.store(),
+                mgr.config().discover_dirs.as_deref(),
+                mgr.open_env().home_dir.as_deref(),
+            )
+            .map_err(store_error_to_rpc)?;
+            ok_json(list)
+        }
+        METHOD_ACCOUNT_DISCOVER => {
+            let list = discover::discover_accounts(mgr.store(), mgr.open_env().home_dir.as_deref())
+                .map_err(store_error_to_rpc)?;
+            ok_json(list)
         }
         other => Err(RpcError {
             code: ERR_METHOD_NOT_FOUND,

@@ -1,21 +1,28 @@
 use std::collections::BTreeMap;
+use std::fs::{self, Permissions};
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use pas_core::protocol::{
-    CreateParams, SessionCreatedEvent, SessionOutputEvent, SessionRemovedEvent, SessionState,
-    SessionStateEvent,
+    CreateParams, OpenTarget, SessionCreatedEvent, SessionOutputEvent, SessionRemovedEvent,
+    SessionState, SessionStateEvent,
 };
 use pas_gui_lib::bridge::{
     Bridge, EventSink, FRONTEND_EVENT_CONNECTION, FRONTEND_EVENT_CREATED, FRONTEND_EVENT_OUTPUT,
     FRONTEND_EVENT_REMOVED, FRONTEND_EVENT_STATE,
 };
+use pasd::acp::AcpEnv;
+use pasd::config::Config;
 use pasd::manager::Manager;
+use pasd::notify::NoopNotifier;
+use pasd::open::{LaunchRequest, Launcher, OpenEnv};
 use pasd::server::{bind, serve};
+use pasd::store::Store;
 use serde_json::Value;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
@@ -230,6 +237,85 @@ async fn bridge_projects_and_groups_roundtrip() {
 
     bridge.remove_project(proj.id).await.unwrap();
     assert!(bridge.list_projects().await.unwrap().is_empty());
+
+    bridge.shutdown();
+    mgr.kill_all();
+    server.abort();
+}
+
+#[derive(Default)]
+struct FakeLauncher {
+    calls: Mutex<Vec<LaunchRequest>>,
+}
+
+impl Launcher for FakeLauncher {
+    fn launch(&self, req: LaunchRequest) -> Result<(), std::io::Error> {
+        self.calls.lock().unwrap().push(req);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn bridge_open_and_discover_roundtrip() {
+    let dir = tempdir().unwrap();
+    let sock = dir.path().join("pas").join("pasd.sock");
+    let fake_home = dir.path().join("home");
+    let bin_dir = dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let code_bin = bin_dir.join("code");
+    fs::write(&code_bin, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&code_bin, Permissions::from_mode(0o755)).unwrap();
+
+    let repo = fake_home.join("Proyectos").join("demo");
+    fs::create_dir_all(repo.join(".git")).unwrap();
+    let file = repo.join("main.rs");
+    fs::write(&file, "fn main() {}\n").unwrap();
+    fs::create_dir_all(fake_home.join(".claude")).unwrap();
+
+    let launcher = Arc::new(FakeLauncher::default());
+    let mgr = Manager::with_open_env(
+        200,
+        Store::open_in_memory().unwrap(),
+        None,
+        None,
+        Config::default(),
+        Arc::new(NoopNotifier),
+        AcpEnv::default(),
+        launcher.clone(),
+        OpenEnv {
+            path_env: Some(bin_dir.into_os_string()),
+            home_dir: Some(fake_home.clone()),
+        },
+    );
+    let listener = bind(&sock).unwrap();
+    let server = tokio::spawn(serve(listener, mgr.clone()));
+
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let bridge = Bridge::new(sock.clone(), Arc::new(TestSink { tx }));
+
+    let projects = bridge.discover_projects().await.unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0].name, "demo");
+
+    let accounts = bridge.discover_accounts().await.unwrap();
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0].suggested_name, "Claude");
+
+    bridge.add_project(repo.clone(), None).await.unwrap();
+
+    let exists = bridge
+        .open_exists(repo.clone(), "main.rs".into())
+        .await
+        .unwrap();
+    assert!(exists.exists);
+
+    bridge
+        .open_path(file.clone(), Some(3), OpenTarget::Editor)
+        .await
+        .unwrap();
+    let calls = launcher.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].program, code_bin);
 
     bridge.shutdown();
     mgr.kill_all();

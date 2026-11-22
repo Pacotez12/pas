@@ -23,6 +23,7 @@ use crate::accounts;
 use crate::acp::{self, AcpEnv, AcpError};
 use crate::config::Config;
 use crate::notify::{NoopNotifier, Notifier, WaitingNotice};
+use crate::open::{Launcher, OpenEnv, SystemLauncher};
 use crate::quota::{self, QuotaTracker, QuotaUpdate};
 use crate::rpc::store_error_to_rpc;
 use crate::session::{Session, SessionError};
@@ -42,6 +43,8 @@ pub struct Manager {
     quotas: QuotaTracker,
     config: Config,
     notifier: Arc<dyn Notifier>,
+    launcher: Arc<dyn Launcher>,
+    open_env: OpenEnv,
 }
 
 impl fmt::Debug for Manager {
@@ -117,6 +120,31 @@ impl Manager {
         notifier: Arc<dyn Notifier>,
         acp_env: AcpEnv,
     ) -> Arc<Self> {
+        Self::with_open_env(
+            idle_ms,
+            store,
+            accounts_dir,
+            socket_path,
+            config,
+            notifier,
+            acp_env,
+            Arc::new(SystemLauncher),
+            OpenEnv::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_open_env(
+        idle_ms: u64,
+        store: Store,
+        accounts_dir: Option<PathBuf>,
+        socket_path: Option<PathBuf>,
+        config: Config,
+        notifier: Arc<dyn Notifier>,
+        acp_env: AcpEnv,
+        launcher: Arc<dyn Launcher>,
+        open_env: OpenEnv,
+    ) -> Arc<Self> {
         let (events_tx, _) = broadcast::channel(EVENTS_BROADCAST_CAPACITY);
         let quotas = QuotaTracker::default();
         quotas.set_warn_percent(config.quota_warn_percent);
@@ -131,7 +159,39 @@ impl Manager {
             quotas,
             config,
             notifier,
+            launcher,
+            open_env,
         })
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    pub fn launcher(&self) -> &dyn Launcher {
+        self.launcher.as_ref()
+    }
+
+    pub fn open_env(&self) -> &OpenEnv {
+        &self.open_env
+    }
+
+    pub fn allowed_open_roots(&self) -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+        if let Ok(projects) = self.store.list_projects() {
+            for p in projects {
+                if let Ok(wts) = self.store.list_worktrees(&p.id) {
+                    for wt in wts {
+                        roots.push(wt.path);
+                    }
+                }
+                roots.push(p.path);
+            }
+        }
+        for s in self.list() {
+            roots.push(s.cwd);
+        }
+        roots
     }
 
     pub fn acp_status(&self) -> Vec<AcpAdapterStatus> {

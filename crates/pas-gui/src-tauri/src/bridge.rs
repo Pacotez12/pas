@@ -10,21 +10,23 @@ use pas_core::protocol::{
     AccountAddParams, AccountInfo, AccountQuota, AccountRemoveParams, AccountRenameParams,
     AcpAdapterStatus, AcpInstallParams, AgentKind, ChatEvent, ChatPermissionParams,
     ChatPromptParams, ClaudeConversation, ClaudeConversationsParams, CreateParams, CreateResult,
-    ERR_SESSION_NOT_FOUND, EVENT_CHAT_EVENT, EVENT_QUOTA_CHANGED, EVENT_QUOTA_WARNING,
-    EVENT_SESSION_CREATED, EVENT_SESSION_FOCUS_REQUEST, EVENT_SESSION_OUTPUT,
-    EVENT_SESSION_REMOVED, EVENT_SESSION_STATE, GroupCreateParams, GroupInfo, GroupRenameParams,
-    IdParams, InputParams, METHOD_ACCOUNT_ADD, METHOD_ACCOUNT_INSTALL_HOOKS, METHOD_ACCOUNT_LIST,
-    METHOD_ACCOUNT_REMOVE, METHOD_ACCOUNT_RENAME, METHOD_ACCOUNT_UNINSTALL_HOOKS,
-    METHOD_ACP_INSTALL, METHOD_ACP_STATUS, METHOD_CHAT_CANCEL, METHOD_CHAT_HISTORY,
-    METHOD_CHAT_PERMISSION, METHOD_CHAT_PROMPT, METHOD_CHAT_TERMINAL_COMMAND,
-    METHOD_CLAUDE_CONVERSATIONS, METHOD_GROUP_CREATE, METHOD_GROUP_LIST, METHOD_GROUP_RENAME,
-    METHOD_PROJECT_ADD, METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE, METHOD_PROJECT_REMOVE,
-    METHOD_PROJECT_RENAME, METHOD_PROJECT_UNPIN, METHOD_QUOTA_LIST, METHOD_SESSION_CREATE,
-    METHOD_SESSION_INPUT, METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_REMOVE,
-    METHOD_SESSION_RESIZE, METHOD_SESSION_SNAPSHOT, METHOD_SESSION_SUBSCRIBE,
-    METHOD_SESSION_SUBSCRIBE_ALL, METHOD_SESSION_UNSUBSCRIBE, METHOD_WORKTREE_BRANCHES,
-    METHOD_WORKTREE_CREATE, METHOD_WORKTREE_LIST, METHOD_WORKTREE_MERGE, METHOD_WORKTREE_REMOVE,
-    METHOD_WORKTREE_SUGGEST_BRANCH, Notification, PermissionChoice, ProjectAddParams, ProjectInfo,
+    DiscoveredAccount, DiscoveredProject, ERR_SESSION_NOT_FOUND, EVENT_CHAT_EVENT,
+    EVENT_QUOTA_CHANGED, EVENT_QUOTA_WARNING, EVENT_SESSION_CREATED, EVENT_SESSION_FOCUS_REQUEST,
+    EVENT_SESSION_OUTPUT, EVENT_SESSION_REMOVED, EVENT_SESSION_STATE, GroupCreateParams, GroupInfo,
+    GroupRenameParams, IdParams, InputParams, METHOD_ACCOUNT_ADD, METHOD_ACCOUNT_DISCOVER,
+    METHOD_ACCOUNT_INSTALL_HOOKS, METHOD_ACCOUNT_LIST, METHOD_ACCOUNT_REMOVE,
+    METHOD_ACCOUNT_RENAME, METHOD_ACCOUNT_UNINSTALL_HOOKS, METHOD_ACP_INSTALL, METHOD_ACP_STATUS,
+    METHOD_CHAT_CANCEL, METHOD_CHAT_HISTORY, METHOD_CHAT_PERMISSION, METHOD_CHAT_PROMPT,
+    METHOD_CHAT_TERMINAL_COMMAND, METHOD_CLAUDE_CONVERSATIONS, METHOD_GROUP_CREATE,
+    METHOD_GROUP_LIST, METHOD_GROUP_RENAME, METHOD_OPEN_EXISTS, METHOD_OPEN_PATH,
+    METHOD_PROJECT_ADD, METHOD_PROJECT_DISCOVER, METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE,
+    METHOD_PROJECT_REMOVE, METHOD_PROJECT_RENAME, METHOD_PROJECT_UNPIN, METHOD_QUOTA_LIST,
+    METHOD_SESSION_CREATE, METHOD_SESSION_INPUT, METHOD_SESSION_KILL, METHOD_SESSION_LIST,
+    METHOD_SESSION_REMOVE, METHOD_SESSION_RESIZE, METHOD_SESSION_SNAPSHOT,
+    METHOD_SESSION_SUBSCRIBE, METHOD_SESSION_SUBSCRIBE_ALL, METHOD_SESSION_UNSUBSCRIBE,
+    METHOD_WORKTREE_BRANCHES, METHOD_WORKTREE_CREATE, METHOD_WORKTREE_LIST, METHOD_WORKTREE_MERGE,
+    METHOD_WORKTREE_REMOVE, METHOD_WORKTREE_SUGGEST_BRANCH, Notification, OpenExistsParams,
+    OpenExistsResult, OpenPathParams, OpenTarget, PermissionChoice, ProjectAddParams, ProjectInfo,
     ProjectMoveParams, ProjectRenameParams, ResizeParams, SessionInfo, SessionRemovedEvent,
     SnapshotResult, WorktreeBranchesParams, WorktreeBranchesResult, WorktreeCreateParams,
     WorktreeInfo, WorktreeListItem, WorktreeListParams, WorktreeRemoveParams,
@@ -350,6 +352,35 @@ impl Bridge {
             )
             .await?;
         Ok(())
+    }
+
+    pub async fn open_path(
+        &self,
+        path: PathBuf,
+        line: Option<u32>,
+        target: OpenTarget,
+    ) -> Result<(), CoreError> {
+        let _: Value = self
+            .call(METHOD_OPEN_PATH, OpenPathParams { path, line, target })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn open_exists(
+        &self,
+        cwd: PathBuf,
+        path: String,
+    ) -> Result<OpenExistsResult, CoreError> {
+        self.call(METHOD_OPEN_EXISTS, OpenExistsParams { cwd, path })
+            .await
+    }
+
+    pub async fn discover_projects(&self) -> Result<Vec<DiscoveredProject>, CoreError> {
+        self.call(METHOD_PROJECT_DISCOVER, json!({})).await
+    }
+
+    pub async fn discover_accounts(&self) -> Result<Vec<DiscoveredAccount>, CoreError> {
+        self.call(METHOD_ACCOUNT_DISCOVER, json!({})).await
     }
 
     pub async fn session_input(&self, id: String, data_b64: String) -> Result<(), CoreError> {
