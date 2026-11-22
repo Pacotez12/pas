@@ -56,7 +56,7 @@ pub fn default_busy_patterns() -> BTreeMap<String, Vec<String>> {
     let mut map = BTreeMap::new();
     map.insert(
         AgentKind::Agy.as_str().to_string(),
-        vec!["esc to cancel".to_string()],
+        vec!["esc to cancel".to_string(), r"\d+ task\(s\)".to_string()],
     );
     map
 }

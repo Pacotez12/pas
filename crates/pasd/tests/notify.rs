@@ -457,6 +457,20 @@ async fn config_busy_patterns_default_custom_and_invalid() {
             .any(|r| r.is_match("esc to cancel · 1 task(s) · /tasks")),
         "default de agy debe matchear 'esc to cancel'"
     );
+
+    // agy sigue esperando un comando en segundo plano aunque muestre "? for shortcuts".
+    assert!(
+        agy_pats
+            .iter()
+            .any(|r| r.is_match("? for shortcuts   auto · Gemini · medium · 1 task(s) · /tasks")),
+        "default de agy debe matchear tareas en segundo plano"
+    );
+    assert!(
+        !agy_pats
+            .iter()
+            .any(|r| r.is_match("? for shortcuts   auto · Gemini 4 Hydrogen · medium")),
+        "sin tareas, la barra de agy no es 'ocupado'"
+    );
     assert!(
         default_cfg
             .compiled_busy_patterns(AgentKind::Claude)
