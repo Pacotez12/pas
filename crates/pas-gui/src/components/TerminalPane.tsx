@@ -127,8 +127,25 @@ export function TerminalPane({
     termRef.current = term;
     fitRef.current = fitAddon;
 
+    const hostWithReader = host as HTMLDivElement & {
+      __pasReadBuffer?: () => string;
+    };
+    hostWithReader.__pasReadBuffer = () => {
+      const buf = term.buffer.active;
+      const lines: string[] = [];
+      for (let i = 0; i < buf.length; i += 1) {
+        const line = buf.getLine(i);
+        if (line) lines.push(line.translateToString(true));
+      }
+      return lines.join("\n");
+    };
+
+    let inputChain = Promise.resolve();
     const dataDisposable = term.onData((data) => {
-      void api.sessionInput(sessionId, encodeUtf8Base64(data)).catch(() => {});
+      const encoded = encodeUtf8Base64(data);
+      inputChain = inputChain
+        .then(() => api.sessionInput(sessionId, encoded))
+        .catch(() => {});
     });
 
     let disposed = false;
@@ -217,6 +234,7 @@ export function TerminalPane({
       unlistenOutput?.();
       unlistenSnapshot?.();
       void api.unsubscribe(sessionId).catch(() => {});
+      delete hostWithReader.__pasReadBuffer;
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
@@ -245,6 +263,7 @@ export function TerminalPane({
   return (
     <div
       className={`pas-pane${isFocused ? " is-focused" : ""}`}
+      data-session-id={sessionId}
       onMouseDown={() => {
         onFocus();
         termRef.current?.focus();

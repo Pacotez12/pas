@@ -6,6 +6,10 @@ use std::time::{Duration, Instant};
 use crate::CoreError;
 use crate::client::Client;
 
+/// Permite sobreescribir el binario de `pasd` que lanza el autoarranque.
+/// Útil en tests e2e para apuntar a un binario inexistente y probar el estado desconectado.
+pub const ENV_PASD_BIN: &str = "PAS_PASD_BIN";
+
 pub async fn connect_or_spawn(path: &Path) -> Result<Client, CoreError> {
     match Client::connect(path).await {
         Ok(client) => return Ok(client),
@@ -51,6 +55,9 @@ pub async fn connect_or_spawn(path: &Path) -> Result<Client, CoreError> {
 }
 
 fn find_pasd() -> PathBuf {
+    if let Some(custom) = std::env::var_os(ENV_PASD_BIN).filter(|v| !v.is_empty()) {
+        return PathBuf::from(custom);
+    }
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {

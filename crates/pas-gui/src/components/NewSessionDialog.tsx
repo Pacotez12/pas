@@ -94,9 +94,16 @@ export function NewSessionDialog({
 
   const cardRef = useRef<HTMLFormElement | null>(null);
   const selectWrapRef = useRef<HTMLDivElement | null>(null);
+  const wasOpenRef = useRef(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      wasOpenRef.current = false;
+      return;
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
+
     const initialProject =
       defaultProjectId && projects.some((p) => p.id === defaultProjectId)
         ? defaultProjectId
