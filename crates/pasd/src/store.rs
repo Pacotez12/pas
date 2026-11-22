@@ -141,6 +141,26 @@ impl Store {
         Ok(projects)
     }
 
+    pub fn find_project_for_cwd(&self, cwd: &Path) -> Result<Option<ProjectInfo>, StoreError> {
+        let canonical_cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+        let projects = self.list_projects()?;
+        Ok(projects
+            .into_iter()
+            .filter_map(|project| {
+                let canonical_project =
+                    std::fs::canonicalize(&project.path).unwrap_or_else(|_| project.path.clone());
+                if canonical_cwd.starts_with(&canonical_project) {
+                    let depth = canonical_project.components().count();
+                    let len = canonical_project.as_os_str().len();
+                    Some(((depth, len), project))
+                } else {
+                    None
+                }
+            })
+            .max_by_key(|(key, _)| *key)
+            .map(|(_, project)| project))
+    }
+
     pub fn remove_project(&self, id: &str) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect("store lock poisoned");
         let tx = conn.transaction()?;

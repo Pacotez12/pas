@@ -1,16 +1,18 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
 use pas_core::protocol::{
     CreateResult, ERR_INVALID_PARAMS, ERR_METHOD_NOT_FOUND, ERR_SESSION_EXITED,
-    ERR_SESSION_RUNNING, EVENT_SESSION_REMOVED, METHOD_SESSION_CREATE, METHOD_SESSION_KILL,
-    METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_REMOVE, METHOD_SESSION_SEND,
-    METHOD_SESSION_WAIT, ReadResult, Request, SessionInfo, SessionRemovedEvent, SessionState,
+    ERR_SESSION_RUNNING, EVENT_SESSION_REMOVED, METHOD_PROJECT_ADD, METHOD_SESSION_CREATE,
+    METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_REMOVE,
+    METHOD_SESSION_SEND, METHOD_SESSION_WAIT, ProjectInfo, ReadResult, Request, SessionInfo,
+    SessionRemovedEvent, SessionState,
 };
 use pasd::manager::Manager;
 use pasd::rpc::dispatch;
 use serde_json::{Value, json};
+use tempfile::tempdir;
 
 fn fake_agent_bin() -> String {
     static BIN: OnceLock<String> = OnceLock::new();
@@ -284,4 +286,119 @@ async fn session_remove_running_is_error() {
     assert_eq!(list.len(), 1);
 
     dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": created.id }))).await;
+}
+
+fn make_git_dir(dir: &Path) -> PathBuf {
+    std::fs::create_dir_all(dir.join(".git")).unwrap();
+    dir.to_path_buf()
+}
+
+async fn add_project(mgr: &Manager, path: &Path) -> ProjectInfo {
+    let r = dispatch(mgr, req(METHOD_PROJECT_ADD, json!({ "path": path }))).await;
+    assert!(r.error.is_none(), "error agregando proyecto: {:?}", r.error);
+    serde_json::from_value(r.result.unwrap()).unwrap()
+}
+
+async fn create_session_in(
+    mgr: &Manager,
+    cwd: &Path,
+    title: &str,
+    project_id: Option<&str>,
+) -> SessionInfo {
+    let mut params = json!({
+        "command": [fake_agent_bin()],
+        "cwd": cwd,
+        "title": title,
+    });
+    if let Some(pid) = project_id {
+        params["project_id"] = json!(pid);
+    }
+    let r = dispatch(mgr, req(METHOD_SESSION_CREATE, params)).await;
+    assert!(r.error.is_none(), "error creando sesión: {:?}", r.error);
+    let created: CreateResult = serde_json::from_value(r.result.unwrap()).unwrap();
+
+    let list: Vec<SessionInfo> = serde_json::from_value(
+        dispatch(mgr, req(METHOD_SESSION_LIST, json!({})))
+            .await
+            .result
+            .unwrap(),
+    )
+    .unwrap();
+    list.into_iter().find(|s| s.id == created.id).unwrap()
+}
+
+#[tokio::test]
+async fn create_infers_project_from_cwd() {
+    let tmp = tempdir().unwrap();
+    let repo = make_git_dir(&tmp.path().join("pockt"));
+    let subdir = repo.join("src").join("nested");
+    std::fs::create_dir_all(&subdir).unwrap();
+
+    let mgr = Manager::new(200);
+    let project = add_project(&mgr, &repo).await;
+
+    let s_root = create_session_in(&mgr, &repo, "root", None).await;
+    assert_eq!(s_root.project_id.as_deref(), Some(project.id.as_str()));
+
+    let s_sub = create_session_in(&mgr, &subdir, "sub", None).await;
+    assert_eq!(s_sub.project_id.as_deref(), Some(project.id.as_str()));
+
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": s_root.id }))).await;
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": s_sub.id }))).await;
+}
+
+#[tokio::test]
+async fn create_infers_deepest_nested_project() {
+    let tmp = tempdir().unwrap();
+    let outer_dir = make_git_dir(&tmp.path().join("outer"));
+    let inner_dir = make_git_dir(&outer_dir.join("inner"));
+    let deep_dir = inner_dir.join("pkg");
+    let outer_other = outer_dir.join("other");
+    std::fs::create_dir_all(&deep_dir).unwrap();
+    std::fs::create_dir_all(&outer_other).unwrap();
+
+    let mgr = Manager::new(200);
+    let outer = add_project(&mgr, &outer_dir).await;
+    let inner = add_project(&mgr, &inner_dir).await;
+
+    let s_inner = create_session_in(&mgr, &deep_dir, "deep", None).await;
+    assert_eq!(s_inner.project_id.as_deref(), Some(inner.id.as_str()));
+
+    let s_outer = create_session_in(&mgr, &outer_other, "outer", None).await;
+    assert_eq!(s_outer.project_id.as_deref(), Some(outer.id.as_str()));
+
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": s_inner.id }))).await;
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": s_outer.id }))).await;
+}
+
+#[tokio::test]
+async fn create_sibling_prefix_is_not_inside() {
+    let tmp = tempdir().unwrap();
+    let repo = make_git_dir(&tmp.path().join("pockt"));
+    let sibling = tmp.path().join("pockt2");
+    std::fs::create_dir_all(&sibling).unwrap();
+
+    let mgr = Manager::new(200);
+    add_project(&mgr, &repo).await;
+
+    let s = create_session_in(&mgr, &sibling, "sibling", None).await;
+    assert_eq!(s.project_id, None);
+
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": s.id }))).await;
+}
+
+#[tokio::test]
+async fn create_explicit_project_id_wins() {
+    let tmp = tempdir().unwrap();
+    let pockt_dir = make_git_dir(&tmp.path().join("pockt"));
+    let other_dir = make_git_dir(&tmp.path().join("other"));
+
+    let mgr = Manager::new(200);
+    add_project(&mgr, &pockt_dir).await;
+    let other = add_project(&mgr, &other_dir).await;
+
+    let s = create_session_in(&mgr, &pockt_dir, "explicit", Some(&other.id)).await;
+    assert_eq!(s.project_id.as_deref(), Some(other.id.as_str()));
+
+    dispatch(&mgr, req(METHOD_SESSION_KILL, json!({ "id": s.id }))).await;
 }

@@ -48,6 +48,19 @@ impl Manager {
     }
 
     pub fn create(&self, mut params: CreateParams) -> Result<Arc<Session>, RpcError> {
+        let has_project_id = params
+            .project_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty());
+        if !has_project_id {
+            params.project_id = self
+                .store
+                .find_project_for_cwd(&params.cwd)
+                .ok()
+                .flatten()
+                .map(|p| p.id);
+        }
+
         let base_title = params
             .title
             .take()
