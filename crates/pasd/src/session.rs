@@ -2,13 +2,13 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::num::NonZeroU16;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
-use pas_core::protocol::{CreateParams, SessionInfo, SessionState, WaitUntil};
+use pas_core::protocol::{AgentKind, CreateParams, SessionInfo, SessionState, WaitUntil};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::{broadcast, watch};
 
@@ -53,6 +53,7 @@ pub struct Session {
     output_tx: broadcast::Sender<Bytes>,
     started_at: Instant,
     last_activity_ms: Arc<AtomicU64>,
+    hooks_active: AtomicBool,
 }
 
 impl fmt::Debug for Session {
@@ -188,7 +189,7 @@ impl Session {
                 let state = state_rx.borrow_and_update().clone();
                 match state {
                     SessionState::Exited { .. } => break,
-                    SessionState::Idle => {
+                    SessionState::Idle | SessionState::Waiting => {
                         if state_rx.changed().await.is_err() {
                             break;
                         }
@@ -239,6 +240,7 @@ impl Session {
             output_tx,
             started_at,
             last_activity_ms,
+            hooks_active: AtomicBool::new(false),
         }))
     }
 
@@ -411,6 +413,27 @@ impl Session {
         self.state_tx.borrow().clone()
     }
 
+    pub fn hooks_active(&self) -> bool {
+        self.hooks_active.load(Ordering::Acquire)
+    }
+
+    pub fn apply_hook(&self, agent: AgentKind, event: &str) {
+        self.hooks_active.store(true, Ordering::Release);
+        let Some(next) = state_for_hook(agent, event) else {
+            return;
+        };
+        let now = self.started_at.elapsed().as_millis() as u64;
+        self.last_activity_ms.store(now, Ordering::Release);
+        self.state_tx.send_if_modified(|s| {
+            if matches!(s, SessionState::Exited { .. }) || *s == next {
+                false
+            } else {
+                *s = next.clone();
+                true
+            }
+        });
+    }
+
     pub fn info(&self) -> SessionInfo {
         SessionInfo {
             id: self.id.clone(),
@@ -460,10 +483,24 @@ impl Session {
     }
 }
 
+pub fn state_for_hook(agent: AgentKind, event: &str) -> Option<SessionState> {
+    match (agent, event) {
+        (AgentKind::Claude, "UserPromptSubmit" | "PreToolUse") => Some(SessionState::Running),
+        (AgentKind::Claude, "PermissionRequest" | "Notification") => Some(SessionState::Waiting),
+        (AgentKind::Claude, "Stop") => Some(SessionState::Idle),
+        (AgentKind::Codex, "user_prompt_submit" | "pre_tool_use") => Some(SessionState::Running),
+        (AgentKind::Codex, "permission_request") => Some(SessionState::Waiting),
+        (AgentKind::Codex, "stop") => Some(SessionState::Idle),
+        (AgentKind::Agy, "PreInvocation" | "PreToolUse") => Some(SessionState::Running),
+        (AgentKind::Agy, "Stop" | "PostInvocation") => Some(SessionState::Idle),
+        _ => None,
+    }
+}
+
 fn matches_until(state: &SessionState, until: WaitUntil) -> bool {
     match state {
         SessionState::Exited { .. } => true,
         SessionState::Idle => matches!(until, WaitUntil::Idle),
-        SessionState::Running => false,
+        SessionState::Running | SessionState::Waiting => false,
     }
 }

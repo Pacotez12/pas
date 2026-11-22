@@ -1,3 +1,5 @@
+mod hook;
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -56,6 +58,10 @@ enum Commands {
     Kill {
         session: String,
     },
+    Hook {
+        agent: String,
+        event: String,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -76,6 +82,10 @@ impl From<WaitUntilArg> for WaitUntil {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Commands::Hook { agent, event } = cli.command {
+        hook::run(&agent, &event).await;
+        return ExitCode::SUCCESS;
+    }
     match run(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(CoreError::Rpc {
@@ -180,6 +190,7 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
                 .call(METHOD_SESSION_KILL, IdParams { id: session })
                 .await?;
         }
+        Commands::Hook { .. } => unreachable!("hook se maneja antes de conectar a pasd"),
     }
 
     Ok(())
@@ -188,6 +199,7 @@ async fn run(cli: Cli) -> Result<(), CoreError> {
 fn format_state(state: &SessionState) -> String {
     match state {
         SessionState::Running => "running".into(),
+        SessionState::Waiting => "waiting".into(),
         SessionState::Idle => "idle".into(),
         SessionState::Exited { code: Some(c) } => format!("exited({c})"),
         SessionState::Exited { code: None } => "exited".into(),

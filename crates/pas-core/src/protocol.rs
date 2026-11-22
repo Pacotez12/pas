@@ -18,6 +18,7 @@ pub const METHOD_SESSION_SNAPSHOT: &str = "session.snapshot";
 pub const METHOD_SESSION_SUBSCRIBE: &str = "session.subscribe";
 pub const METHOD_SESSION_UNSUBSCRIBE: &str = "session.unsubscribe";
 pub const METHOD_SESSION_SUBSCRIBE_ALL: &str = "session.subscribe_all";
+pub const METHOD_SESSION_HOOK: &str = "session.hook";
 pub const METHOD_PROJECT_ADD: &str = "project.add";
 pub const METHOD_PROJECT_LIST: &str = "project.list";
 pub const METHOD_PROJECT_REMOVE: &str = "project.remove";
@@ -121,6 +122,7 @@ pub struct RpcError {
 #[serde(tag = "state", rename_all = "lowercase")]
 pub enum SessionState {
     Running,
+    Waiting,
     Idle,
     Exited { code: Option<i32> },
 }
@@ -374,4 +376,11 @@ pub struct AccountRemoveParams {
     pub id: String,
     #[serde(default)]
     pub delete_dir: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookParams {
+    pub id: String,
+    pub agent: AgentKind,
+    pub event: String,
 }

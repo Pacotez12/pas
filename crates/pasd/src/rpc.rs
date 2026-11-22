@@ -7,15 +7,16 @@ use pas_core::protocol::{
     CreateParams, CreateResult, ERR_ACCOUNT_ALREADY_EXISTS, ERR_ACCOUNT_DIR_INVALID,
     ERR_ACCOUNT_NOT_FOUND, ERR_GROUP_ALREADY_EXISTS, ERR_GROUP_NOT_FOUND, ERR_INVALID_PARAMS,
     ERR_METHOD_NOT_FOUND, ERR_NOT_A_GIT_REPO, ERR_PROJECT_ALREADY_EXISTS, ERR_PROJECT_NOT_FOUND,
-    GroupCreateParams, GroupRenameParams, IdParams, InputParams, METHOD_ACCOUNT_ADD,
+    GroupCreateParams, GroupRenameParams, HookParams, IdParams, InputParams, METHOD_ACCOUNT_ADD,
     METHOD_ACCOUNT_LIST, METHOD_ACCOUNT_REMOVE, METHOD_ACCOUNT_RENAME, METHOD_CLAUDE_CONVERSATIONS,
     METHOD_DAEMON_PING, METHOD_GROUP_CREATE, METHOD_GROUP_LIST, METHOD_GROUP_RENAME,
     METHOD_PROJECT_ADD, METHOD_PROJECT_LIST, METHOD_PROJECT_MOVE, METHOD_PROJECT_REMOVE,
-    METHOD_PROJECT_RENAME, METHOD_PROJECT_UNPIN, METHOD_SESSION_CREATE, METHOD_SESSION_INPUT,
-    METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_READ, METHOD_SESSION_REMOVE,
-    METHOD_SESSION_RESIZE, METHOD_SESSION_SEND, METHOD_SESSION_SNAPSHOT, METHOD_SESSION_WAIT,
-    PingResult, ProjectAddParams, ProjectMoveParams, ProjectRenameParams, ReadParams, ReadResult,
-    Request, ResizeParams, Response, RpcError, SendParams, SnapshotResult, WaitParams,
+    METHOD_PROJECT_RENAME, METHOD_PROJECT_UNPIN, METHOD_SESSION_CREATE, METHOD_SESSION_HOOK,
+    METHOD_SESSION_INPUT, METHOD_SESSION_KILL, METHOD_SESSION_LIST, METHOD_SESSION_READ,
+    METHOD_SESSION_REMOVE, METHOD_SESSION_RESIZE, METHOD_SESSION_SEND, METHOD_SESSION_SNAPSHOT,
+    METHOD_SESSION_WAIT, PingResult, ProjectAddParams, ProjectMoveParams, ProjectRenameParams,
+    ReadParams, ReadResult, Request, ResizeParams, Response, RpcError, SendParams, SnapshotResult,
+    WaitParams,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -105,6 +106,12 @@ async fn handle(mgr: &Manager, req: Request) -> Result<Value, RpcError> {
         METHOD_SESSION_REMOVE => {
             let params: IdParams = parse_params(req.params)?;
             mgr.remove(&params.id)?;
+            Ok(json!({}))
+        }
+        METHOD_SESSION_HOOK => {
+            let params: HookParams = parse_params(req.params)?;
+            let session = mgr.get(&params.id)?;
+            session.apply_hook(params.agent, &params.event);
             Ok(json!({}))
         }
         METHOD_CLAUDE_CONVERSATIONS => {
